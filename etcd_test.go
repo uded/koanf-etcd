@@ -186,3 +186,49 @@ func TestOptions_BlobAndStrict(t *testing.T) {
 		t.Errorf("onEmpty callback not invoked")
 	}
 }
+
+func TestOptions_Watch(t *testing.T) {
+	s := newSettings()
+	opts := []Option{
+		WithWatchContext(context.Background()),
+		WithDebounce(100 * time.Millisecond),
+		WithReconnectBackoff(500*time.Millisecond, 10*time.Second),
+		WithResumeFromRevision(false),
+		WithProgressNotify(true),
+		WithEventFilter(true, false), // deliver only puts
+		WithCreatedNotify(true),
+		WithRedactor(func(k string, raw []byte) string { return "***" }),
+		WithOnReconnect(func(int, error) {}),
+		WithOnResync(func(string, int64) {}),
+		WithOnWatchError(func(error) {}),
+	}
+	for _, opt := range opts {
+		if err := opt(s); err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+	}
+	if s.watchCtx == nil {
+		t.Errorf("watchCtx not set")
+	}
+	if s.debounce != 100*time.Millisecond {
+		t.Errorf("debounce: %v", s.debounce)
+	}
+	if s.reconnectMin != 500*time.Millisecond || s.reconnectMax != 10*time.Second {
+		t.Errorf("reconnect: %v/%v", s.reconnectMin, s.reconnectMax)
+	}
+	if s.resumeFromRevision {
+		t.Errorf("resumeFromRevision should be false")
+	}
+	if !s.progressNotify {
+		t.Errorf("progressNotify not set")
+	}
+	if !s.filterSet || !s.wantPut || s.wantDelete {
+		t.Errorf("filters: set=%v put=%v delete=%v", s.filterSet, s.wantPut, s.wantDelete)
+	}
+	if !s.createdNotify {
+		t.Errorf("createdNotify not set")
+	}
+	if s.redactor == nil || s.onReconnect == nil || s.onResync == nil || s.onWatchError == nil {
+		t.Errorf("callbacks not set")
+	}
+}

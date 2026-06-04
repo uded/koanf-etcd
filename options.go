@@ -194,3 +194,98 @@ func WithStrict(on bool) Option {
 func OnEmpty(fn func(prefix string)) Option {
 	return func(s *settings) error { s.onEmpty = fn; return nil }
 }
+
+// --- watch ---
+
+// WithWatchContext sets the parent context for the watch goroutine.
+// Cancelling it cleanly stops the watcher. Default: the Provider's
+// internal context (cancelled by Close).
+func WithWatchContext(ctx context.Context) Option {
+	return func(s *settings) error { s.watchCtx = ctx; return nil }
+}
+
+// WithDebounce coalesces a burst of watch events into one callback,
+// firing after the window elapses with no new event. 0 = no debounce
+// (every event fires immediately). Recommended 100ms-1s for scripted
+// multi-put rollouts.
+func WithDebounce(window time.Duration) Option {
+	return func(s *settings) error { s.debounce = window; return nil }
+}
+
+// WithReconnectBackoff sets the bounds for exponential backoff (with full
+// jitter) used when the watch channel closes. Default min=1s, max=2min.
+func WithReconnectBackoff(min, max time.Duration) Option {
+	return func(s *settings) error {
+		s.reconnectMin = min
+		s.reconnectMax = max
+		return nil
+	}
+}
+
+// WithResumeFromRevision toggles starting the watch at
+// (initialReadRevision + 1) so no event between Read() and Watch.Start
+// is missed. Default true.
+func WithResumeFromRevision(on bool) Option {
+	return func(s *settings) error { s.resumeFromRevision = on; return nil }
+}
+
+// WithProgressNotify enables clientv3.WithProgressNotify on the watch
+// stream — etcd sends periodic empty responses so the watcher can confirm
+// liveness even when no keys change.
+func WithProgressNotify(on bool) Option {
+	return func(s *settings) error { s.progressNotify = on; return nil }
+}
+
+// WithEventFilter selects which event types Watch / WatchTyped delivers.
+// The booleans declare "deliver this type":
+//
+//   - WithEventFilter(true, false)  → deliver only puts
+//   - WithEventFilter(false, true)  → deliver only deletes
+//   - WithEventFilter(true, true)   → deliver both (same as not calling)
+//   - WithEventFilter(false, false) → deliver neither (effectively a mute)
+//
+// Default (option not set) is "deliver both". When exactly one boolean
+// is true, the corresponding server-side clientv3 filter is applied so
+// unwanted events never cross the wire.
+func WithEventFilter(put, deleteEv bool) Option {
+	return func(s *settings) error {
+		s.wantPut = put
+		s.wantDelete = deleteEv
+		s.filterSet = true
+		return nil
+	}
+}
+
+// WithCreatedNotify enables clientv3.WithCreatedNotify on the watch
+// stream — etcd sends an empty response confirming the watch is
+// established. Useful for tests and as a startup gate.
+func WithCreatedNotify(on bool) Option {
+	return func(s *settings) error { s.createdNotify = on; return nil }
+}
+
+// WithRedactor sets a function that produces a safe display string for a
+// (key, value) pair. Used by all internal logging touching values.
+// Default: returns "[REDACTED]". Set to func(k string, raw []byte) string
+// { return string(raw) } to disable redaction (NOT recommended in
+// production).
+func WithRedactor(fn func(key string, raw []byte) string) Option {
+	return func(s *settings) error { s.redactor = fn; return nil }
+}
+
+// WithOnReconnect fires after each successful watch reconnect. attempt is
+// the 1-indexed retry count since the last successful connect.
+func WithOnReconnect(fn func(attempt int, lastErr error)) Option {
+	return func(s *settings) error { s.onReconnect = fn; return nil }
+}
+
+// WithOnResync fires after a resync (typically compaction recovery)
+// completes, with the new revision the watcher resumes from.
+func WithOnResync(fn func(reason string, newRevision int64)) Option {
+	return func(s *settings) error { s.onResync = fn; return nil }
+}
+
+// WithOnWatchError fires on each non-recoverable watch error before the
+// watcher retries.
+func WithOnWatchError(fn func(err error)) Option {
+	return func(s *settings) error { s.onWatchError = fn; return nil }
+}
