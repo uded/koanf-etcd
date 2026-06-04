@@ -2,6 +2,8 @@ module github.com/uded/koanf-etcd
 
 go 1.23.0
 
+toolchain go1.25.11
+
 require (
 	github.com/knadh/koanf/parsers/yaml v1.1.0
 	github.com/knadh/koanf/v2 v2.3.5

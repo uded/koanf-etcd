@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-06-05
+
+### Fixed
+
+- Added `toolchain go1.25.11` directive to `go.mod`. The previous `v0.1.1` CI still failed because `govulncheck` scans the standard library at the `go` directive's version (`1.23.0`), not the runner's Go version. The `toolchain` directive hints `go` and `govulncheck` to use Go 1.25.11's patched stdlib without raising the consumer floor (still `go 1.23`).
+
+### Notes
+
+- Consumers on Go 1.23 with toolchain auto-download disabled (`GOTOOLCHAIN=local`) will still build against their local stdlib. Default behavior auto-downloads 1.25.11 on first build.
+
 ## [0.1.1] - 2026-06-05
 
 ### Fixed
