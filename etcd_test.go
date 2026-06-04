@@ -103,3 +103,86 @@ func TestOptions_SRVEndpoints(t *testing.T) {
 		t.Errorf("srv fields: %q/%q/%q", s.srvService, s.srvProto, s.srvDomain)
 	}
 }
+
+func TestOptions_ReadShaping(t *testing.T) {
+	s := newSettings()
+	keyXf := func(k string) string { return k }
+	valXf := func(k string, raw []byte) (any, error) { return string(raw), nil }
+	opts := []Option{
+		WithKey("/app/cfg"),
+		WithDelim("/"),
+		WithTrimPrefix(false),
+		WithUnflatten(false),
+		WithKeyTransform(keyXf),
+		WithValueTransform(valXf),
+		WithLimit(500),
+		WithSerializable(true),
+		WithReadRevision(42),
+		WithReadTimeout(2 * time.Second),
+	}
+	for _, opt := range opts {
+		if err := opt(s); err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+	}
+	if s.key != "/app/cfg" {
+		t.Errorf("key: %q", s.key)
+	}
+	if s.delim != "/" {
+		t.Errorf("delim: %q", s.delim)
+	}
+	if s.trimPrefix {
+		t.Errorf("trimPrefix should be false")
+	}
+	if s.unflatten {
+		t.Errorf("unflatten should be false")
+	}
+	if s.keyTransform == nil || s.valueTransform == nil {
+		t.Errorf("transforms not set")
+	}
+	if s.limit != 500 {
+		t.Errorf("limit: %d", s.limit)
+	}
+	if !s.serializable {
+		t.Errorf("serializable should be true")
+	}
+	if s.readRevision != 42 {
+		t.Errorf("readRevision: %d", s.readRevision)
+	}
+	if s.readTimeout != 2*time.Second {
+		t.Errorf("readTimeout: %v", s.readTimeout)
+	}
+}
+
+func TestOptions_BlobAndStrict(t *testing.T) {
+	s := newSettings()
+	called := false
+	onEmpty := func(prefix string) { called = true }
+	opts := []Option{
+		WithPrefix("/cfg/"),
+		WithBlob(),
+		WithStrict(true),
+		OnEmpty(onEmpty),
+	}
+	for _, opt := range opts {
+		if err := opt(s); err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+	}
+	if s.prefix != "/cfg/" {
+		t.Errorf("prefix: %q", s.prefix)
+	}
+	if !s.blob {
+		t.Errorf("blob not set")
+	}
+	if !s.strict {
+		t.Errorf("strict not set")
+	}
+	if s.onEmpty == nil {
+		t.Errorf("onEmpty not set")
+	}
+	s.onEmpty("/x")
+	if !called {
+		t.Errorf("onEmpty callback not invoked")
+	}
+}
