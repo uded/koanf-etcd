@@ -1,0 +1,25 @@
+# Local-only tooling artifacts (per global CLAUDE.md — never commit)
+docs/superpowers/
+.claude/
+.serena/
+.remember/
+CLAUDE.md
+SESSION_CONTEXT.md
+
+# Stray files
+tools.yaml
+
+# Build & test artifacts
+*.test
+*.out
+coverage.out
+coverage.html
+/dist/
+/bin/
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store

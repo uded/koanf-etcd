@@ -1,0 +1,38 @@
+version: '3'
+
+tasks:
+  lint:
+    desc: "Run static analysis"
+    cmds:
+      - gofmt -l . | tee /dev/stderr | (! read)
+      - go vet ./...
+      - staticcheck ./...
+      - golangci-lint run
+
+  test:
+    desc: "Run tests with race detector"
+    cmds:
+      - go test -race -count=1 ./...
+
+  cover:
+    desc: "Run tests with coverage"
+    cmds:
+      - go test -race -coverprofile=coverage.out ./...
+      - go tool cover -html=coverage.out -o coverage.html
+
+  vuln:
+    desc: "Govulncheck against current deps"
+    cmds:
+      - govulncheck ./...
+
+  bench:
+    desc: "Run benchmarks"
+    cmds:
+      - go test -bench=. -benchmem -run=^$ ./...
+
+  all:
+    desc: "Lint + test + vuln"
+    cmds:
+      - task: lint
+      - task: test
+      - task: vuln
