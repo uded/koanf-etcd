@@ -915,3 +915,21 @@ func TestWatch_CtxCancelExitsCleanly(t *testing.T) {
 	// Give the watch goroutine ~200ms to fully exit before goleak runs.
 	time.Sleep(200 * time.Millisecond)
 }
+
+func TestWatch_AlreadyActiveError(t *testing.T) {
+	cli := embeddedEtcd(t)
+	cli.Put(context.Background(), "/k", "v")
+	p, _ := New(WithClient(cli), WithKey("/k"))
+	t.Cleanup(func() { _ = p.Close() })
+	p.Read()
+
+	if err := p.Watch(func(_ any, _ error) {}); err != nil {
+		t.Fatalf("first watch: %v", err)
+	}
+	if err := p.Watch(func(_ any, _ error) {}); err == nil {
+		t.Fatalf("expected error on second Watch")
+	}
+	if err := p.WatchTyped(context.Background(), func([]Event, error) {}); err == nil {
+		t.Fatalf("expected error on WatchTyped after Watch")
+	}
+}
