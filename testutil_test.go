@@ -5,7 +5,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -204,23 +203,6 @@ func writePEM(t *testing.T, path, typ string, der []byte) {
 	if err := pem.Encode(f, &pem.Block{Type: typ, Bytes: der}); err != nil {
 		t.Fatalf("encode pem %s: %v", path, err)
 	}
-}
-
-// loadTLSConfig builds a *tls.Config that trusts the fixture CA and
-// presents the fixture client cert/key.
-func loadTLSConfig(t *testing.T, f tlsFixture) *tls.Config {
-	t.Helper()
-	cert, err := tls.LoadX509KeyPair(f.cliCert, f.cliKey)
-	if err != nil {
-		t.Fatalf("load client cert: %v", err)
-	}
-	caPEM, err := os.ReadFile(f.caFile)
-	if err != nil {
-		t.Fatalf("read ca: %v", err)
-	}
-	pool := x509.NewCertPool()
-	pool.AppendCertsFromPEM(caPEM)
-	return &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: pool}
 }
 
 // ctxWithTimeout returns a context with the given timeout and registers

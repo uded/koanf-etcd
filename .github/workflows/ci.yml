@@ -19,7 +19,7 @@ jobs:
       - name: 🧰 Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.25'
           cache: true
       - name: 📐 gofmt
         run: |
@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go: ['1.23', '1.24']
+        go: ['1.24', '1.25']
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4
@@ -54,7 +54,7 @@ jobs:
       - name: 🧪 go test -race
         run: go test -race -count=1 -timeout 300s -coverprofile=coverage.out ./...
       - name: 📊 Upload coverage
-        if: matrix.go == '1.23'
+        if: matrix.go == '1.25'
         uses: actions/upload-artifact@v4
         with:
           name: coverage
@@ -69,7 +69,7 @@ jobs:
       - name: 🧰 Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.25'
           cache: true
       - name: 🛡️ govulncheck
         run: |
@@ -86,7 +86,7 @@ jobs:
       - name: 🧰 Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.25'
           cache: true
       - name: 🏗️ go build
         run: go build -trimpath ./...
