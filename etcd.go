@@ -226,23 +226,23 @@ func defaultRedactor(key string, raw []byte) string {
 	return "[REDACTED]"
 }
 
-// Event is a typed watch event delivered to WatchTyped subscribers.
-// The concrete fields are populated by the watch loop (a later task);
-// the type is declared here so Provider can hold a typed callback.
+// Event is a single change observed by WatchTyped. Resync events have
+// empty Key and Value; the entire current state was re-read.
 type Event struct {
 	Type     EventType
 	Key      string
 	Value    []byte
-	PrevKV   []byte
 	Revision int64
 }
 
-// EventType discriminates between put and delete watch events.
+// EventType classifies an Event.
 type EventType int
 
 const (
 	// EventPut is delivered when a key is created or updated.
-	EventPut EventType = iota
+	EventPut EventType = iota + 1
 	// EventDelete is delivered when a key is removed.
 	EventDelete
+	// EventResync is delivered after a full re-read following compaction.
+	EventResync
 )
