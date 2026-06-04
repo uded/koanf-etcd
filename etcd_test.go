@@ -831,3 +831,44 @@ func TestWatch_CompactionEmitsResync(t *testing.T) {
 		t.Fatalf("OnResync callback not invoked")
 	}
 }
+
+func TestWatch_DebounceCoalesces(t *testing.T) {
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 30*time.Second)
+
+	p, err := New(
+		WithClient(cli),
+		WithPrefix("/burst/"),
+		WithDebounce(200*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	if _, err := p.Read(); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	calls := atomic.Int32{}
+	if err := p.Watch(func(_ any, _ error) {
+		calls.Add(1)
+	}); err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+
+	// Burst: 20 puts within ~50ms.
+	for i := 0; i < 20; i++ {
+		cli.Put(ctx, fmt.Sprintf("/burst/k%d", i), fmt.Sprintf("v%d", i))
+	}
+
+	// Wait for debounce window + slack.
+	time.Sleep(600 * time.Millisecond)
+
+	got := calls.Load()
+	if got == 0 {
+		t.Fatalf("no callbacks fired")
+	}
+	if got > 3 {
+		t.Errorf("debounce failed: %d callbacks for a 20-put burst (want 1-3)", got)
+	}
+}
