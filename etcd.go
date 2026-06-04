@@ -226,6 +226,48 @@ func defaultRedactor(key string, raw []byte) string {
 	return "[REDACTED]"
 }
 
+// Watch implements koanf's watch convention. The event payload is nil —
+// matches the file provider convention. Callers wanting per-key detail
+// should use WatchTyped. Calling Watch when a watch is already active
+// returns an error.
+func (p *Provider) Watch(cb func(event any, err error)) error {
+	if p.closed.Load() {
+		return ErrClosed
+	}
+	p.watchMu.Lock()
+	defer p.watchMu.Unlock()
+	if p.watchCancel != nil {
+		return fmt.Errorf("koanf-etcd: watch already active")
+	}
+	parent := p.settings.watchCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	p.watchCancel = cancel
+	p.watchCb = cb
+	go p.watchLoop(ctx)
+	return nil
+}
+
+// WatchTyped delivers []Event batches to cb. ctx cancels the watcher.
+// Mutually exclusive with Watch().
+func (p *Provider) WatchTyped(ctx context.Context, cb func([]Event, error)) error {
+	if p.closed.Load() {
+		return ErrClosed
+	}
+	p.watchMu.Lock()
+	defer p.watchMu.Unlock()
+	if p.watchCancel != nil {
+		return fmt.Errorf("koanf-etcd: watch already active")
+	}
+	loopCtx, cancel := context.WithCancel(ctx)
+	p.watchCancel = cancel
+	p.watchTypedCb = cb
+	go p.watchLoop(loopCtx)
+	return nil
+}
+
 // Event is a single change observed by WatchTyped. Resync events have
 // empty Key and Value; the entire current state was re-read.
 type Event struct {

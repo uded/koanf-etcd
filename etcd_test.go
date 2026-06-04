@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -634,6 +635,58 @@ func TestRead_AuthHappyPath(t *testing.T) {
 
 func TestRead_TLS(t *testing.T) {
 	t.Skip("TLS embedded-etcd setup is a larger task; covered by Option-level tests for WithTLS / WithTLSFiles config wiring. End-to-end TLS verified manually against an external cluster pre-release.")
+}
+
+func TestWatch_NoGap(t *testing.T) {
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 30*time.Second)
+	if _, err := cli.Put(ctx, "/svc/initial", "v0"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	p, err := New(WithClient(cli), WithPrefix("/svc/"))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	// Race-the-gap: do a Read, then write a new key BEFORE Watch starts.
+	// If the Provider correctly captures resp.Header.Revision and starts
+	// the watch at Rev+1, the new key is delivered.
+	if _, err := p.Read(); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	gotCh := make(chan struct{}, 1)
+	var mu sync.Mutex
+	calls := 0
+
+	if err := p.Watch(func(event any, err error) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		select {
+		case gotCh <- struct{}{}:
+		default:
+		}
+	}); err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+
+	// Write the "gap" key.
+	if _, err := cli.Put(ctx, "/svc/gap", "v1"); err != nil {
+		t.Fatalf("gap put: %v", err)
+	}
+
+	select {
+	case <-gotCh:
+		// good
+	case <-time.After(5 * time.Second):
+		mu.Lock()
+		c := calls
+		mu.Unlock()
+		t.Fatalf("watch cb never fired (%d calls so far)", c)
+	}
 }
 
 func TestLoadTLSFromFiles(t *testing.T) {
