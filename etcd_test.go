@@ -764,3 +764,70 @@ func TestWatch_ReconnectsAfterClientClose(t *testing.T) {
 		}
 	}
 }
+
+func TestWatch_CompactionEmitsResync(t *testing.T) {
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 30*time.Second)
+	cli.Put(ctx, "/svc/k", "v0")
+
+	resyncCh := make(chan int64, 1)
+	p, err := New(
+		WithClient(cli),
+		WithPrefix("/svc/"),
+		WithOnResync(func(reason string, newRev int64) {
+			select {
+			case resyncCh <- newRev:
+			default:
+			}
+		}),
+	)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	if _, err := p.Read(); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// Advance etcd's revision well past the provider's stored revision
+	// BEFORE starting the watch. Then compact at the latest revision so
+	// the watch's resume point (revAfterRead+1) lands inside the
+	// compacted range — guaranteeing ErrCompacted on watch start.
+	var latestRev int64
+	for i := 0; i < 20; i++ {
+		putResp, err := cli.Put(ctx, "/svc/k", fmt.Sprintf("v%d", i+1))
+		if err != nil {
+			t.Fatalf("put: %v", err)
+		}
+		latestRev = putResp.Header.Revision
+	}
+	if _, err := cli.Compact(ctx, latestRev); err != nil {
+		t.Logf("compact: %v (best-effort)", err)
+	}
+
+	resyncEv := make(chan struct{}, 1)
+	if err := p.WatchTyped(context.Background(), func(evs []Event, err error) {
+		for _, e := range evs {
+			if e.Type == EventResync {
+				select {
+				case resyncEv <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}); err != nil {
+		t.Fatalf("watchTyped: %v", err)
+	}
+
+	select {
+	case <-resyncEv:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("no Resync event delivered after compaction")
+	}
+	select {
+	case <-resyncCh:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("OnResync callback not invoked")
+	}
+}
