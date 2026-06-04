@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-06-05
+
+### Fixed
+
+- Removed unused `loadTLSConfig` test helper that `staticcheck` (U1000) flagged in the CI lint job.
+
+### Changed
+
+- CI Go matrix bumped from `1.23 / 1.24` to `1.24 / 1.25`; `govulncheck` and the lint/build jobs now run on Go 1.25 so the stdlib advisories `GO-2026-5037` (`crypto/x509`), `GO-2026-5039` (`net/textproto`), and `GO-2026-4971` (`net`) are not surfaced. The `go.mod` floor remains `1.23`, so downstream consumers on Go 1.23+ are unaffected.
+
+### Notes
+
+- `v0.1.0` shipped with a broken CI run (the two issues above). The library code itself was unchanged; `v0.1.1` is a CI-only fix.
+
 ## [0.1.0] - 2026-06-04
 
 ### Added
