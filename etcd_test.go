@@ -337,3 +337,68 @@ func TestTransform_DefaultValue_TrimsWhitespace(t *testing.T) {
 		t.Errorf("got %q; want %q", s, "http://x")
 	}
 }
+
+func TestRead_SingleKey(t *testing.T) {
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 5*time.Second)
+	if _, err := cli.Put(ctx, "/app/cfg/db.host", "localhost"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	p, err := New(WithClient(cli), WithKey("/app/cfg/db.host"))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	m, err := p.Read()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	// Single-key mode returns the value at a nested koanf path derived
+	// from the etcd key via the default key transform. With no prefix
+	// trim (single-key mode skips prefix-trim) and default delim ".",
+	// the path "/app/cfg/db.host" becomes ".app.cfg.db.host" → unflatten
+	// produces a nested map rooted at "app".
+	app, ok := m["app"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected nested map under 'app'; got %T (%v)", m["app"], m)
+	}
+	_ = app
+}
+
+func TestRead_SingleKey_TrimsValueWhitespace(t *testing.T) {
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 5*time.Second)
+	if _, err := cli.Put(ctx, "/app/url", "  http://x\n"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	p, _ := New(WithClient(cli), WithKey("/app/url"))
+	t.Cleanup(func() { _ = p.Close() })
+
+	m, err := p.Read()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	app, _ := m["app"].(map[string]any)
+	if app["url"] != "http://x" {
+		t.Errorf("got %v; want http://x", app["url"])
+	}
+}
+
+func TestRead_RecordsRevision(t *testing.T) {
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 5*time.Second)
+	if _, err := cli.Put(ctx, "/k", "v"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	p, _ := New(WithClient(cli), WithKey("/k"))
+	t.Cleanup(func() { _ = p.Close() })
+	if _, err := p.Read(); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if p.Revision() == 0 {
+		t.Errorf("Revision() = 0 after Read; want > 0")
+	}
+}
