@@ -933,3 +933,49 @@ func TestWatch_AlreadyActiveError(t *testing.T) {
 		t.Fatalf("expected error on WatchTyped after Watch")
 	}
 }
+
+func TestStats_PutDeleteCounts(t *testing.T) {
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 10*time.Second)
+	cli.Put(ctx, "/svc/k1", "v1")
+	cli.Put(ctx, "/svc/k2", "v2")
+
+	p, _ := New(WithClient(cli), WithPrefix("/svc/"))
+	t.Cleanup(func() { _ = p.Close() })
+	if _, err := p.Read(); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	done := make(chan struct{})
+	count := atomic.Int32{}
+	if err := p.Watch(func(_ any, _ error) {
+		if count.Add(1) == 3 {
+			close(done)
+		}
+	}); err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+
+	cli.Put(ctx, "/svc/k3", "v3")
+	cli.Put(ctx, "/svc/k1", "v1-upd")
+	cli.Delete(ctx, "/svc/k2")
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		// even if debounce coalesces, we may not get 3 cb fires —
+		// fall through and inspect stats anyway
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	s := p.Stats()
+	if s.TotalPuts < 2 {
+		t.Errorf("TotalPuts = %d; want >= 2", s.TotalPuts)
+	}
+	if s.TotalDeletes < 1 {
+		t.Errorf("TotalDeletes = %d; want >= 1", s.TotalDeletes)
+	}
+	if s.Revision == 0 {
+		t.Errorf("Revision = 0; want > 0")
+	}
+}
