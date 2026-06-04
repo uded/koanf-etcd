@@ -6,6 +6,15 @@ A production-grade [koanf](https://github.com/knadh/koanf) v2 Provider for [etcd
 [![Go Reference](https://pkg.go.dev/badge/github.com/uded/koanf-etcd.svg)](https://pkg.go.dev/github.com/uded/koanf-etcd)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+## Related projects
+
+This provider composes with two sibling packages in the same family:
+
+- **[koanf-structdefaults](https://github.com/uded/koanf-structdefaults)** — populate a koanf instance from struct-tag defaults. The natural *floor* layer below this provider in the load order.
+- **[koanf-validate](https://github.com/uded/koanf-validate)** — validate the assembled koanf config against struct-tag rules. Pair with this provider's watch loop to gate bad etcd writes (see [Watch + reload recipe](#watch--reload-recipe) below).
+
+Recommended load order: `structdefaults` → file → `koanf-etcd` → env, with `koanf-validate` as the post-load gate.
+
 ## Why this exists
 
 The bundled `github.com/knadh/koanf/providers/etcd` has caused real production incidents because:
