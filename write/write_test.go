@@ -2,6 +2,7 @@ package etcdwrite_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -74,6 +75,36 @@ func TestDeletePrefix(t *testing.T) {
 	resp, _ := cli.Get(ctx, "/p/", clientv3.WithPrefix())
 	if len(resp.Kvs) != 0 {
 		t.Errorf("got %d keys; want 0", len(resp.Kvs))
+	}
+}
+
+func TestDeletePrefix_RejectsEmpty(t *testing.T) {
+	cli := newEmbedded(t)
+	if err := etcdwrite.DeletePrefix(context.Background(), cli, ""); !errors.Is(err, etcdwrite.ErrUnsafePrefix) {
+		t.Fatalf("want ErrUnsafePrefix for empty prefix, got %v", err)
+	}
+	if err := etcdwrite.DeletePrefix(context.Background(), cli, "/"); !errors.Is(err, etcdwrite.ErrUnsafePrefix) {
+		t.Fatalf("want ErrUnsafePrefix for root prefix, got %v", err)
+	}
+}
+
+func TestDeletePrefix_AllowEmptyOptIn(t *testing.T) {
+	cli := newEmbedded(t)
+	ctx := context.Background()
+	etcdwrite.Put(ctx, cli, "/seed/a", "1")
+	if err := etcdwrite.DeletePrefix(ctx, cli, "", etcdwrite.AllowEmptyPrefix()); err != nil {
+		t.Fatalf("AllowEmptyPrefix should permit empty: %v", err)
+	}
+	resp, _ := cli.Get(ctx, "", clientv3.WithPrefix())
+	if len(resp.Kvs) != 0 {
+		t.Errorf("expected cluster wiped; got %d kvs", len(resp.Kvs))
+	}
+}
+
+func TestDelete_RejectsEmpty(t *testing.T) {
+	cli := newEmbedded(t)
+	if err := etcdwrite.Delete(context.Background(), cli, ""); !errors.Is(err, etcdwrite.ErrUnsafePrefix) {
+		t.Fatalf("want ErrUnsafePrefix for empty key, got %v", err)
 	}
 }
 

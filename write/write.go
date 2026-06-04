@@ -2,10 +2,30 @@ package etcdwrite
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
+
+// ErrUnsafePrefix is returned when DeletePrefix is called with an empty
+// or root-only ("/") prefix, which would wipe every key in the cluster.
+// Pass AllowEmptyPrefix() as the trailing option to opt in.
+var ErrUnsafePrefix = errors.New("etcdwrite: refusing to delete cluster-wide; pass AllowEmptyPrefix to override")
+
+// Option configures write-helper behavior.
+type Option func(*opts)
+
+type opts struct {
+	allowEmptyPrefix bool
+}
+
+// AllowEmptyPrefix lifts the empty-prefix guard on DeletePrefix.
+// Intended only for multi-tenant cluster-wipe operations; callers
+// must accept the blast radius.
+func AllowEmptyPrefix() Option {
+	return func(o *opts) { o.allowEmptyPrefix = true }
+}
 
 // Put writes a single key.
 func Put(ctx context.Context, cli *clientv3.Client, key, value string) error {
@@ -17,6 +37,9 @@ func Put(ctx context.Context, cli *clientv3.Client, key, value string) error {
 
 // Delete removes a single key.
 func Delete(ctx context.Context, cli *clientv3.Client, key string) error {
+	if key == "" {
+		return fmt.Errorf("%w: empty key", ErrUnsafePrefix)
+	}
 	if _, err := cli.Delete(ctx, key); err != nil {
 		return fmt.Errorf("etcdwrite: delete %q: %w", key, err)
 	}
@@ -24,7 +47,18 @@ func Delete(ctx context.Context, cli *clientv3.Client, key string) error {
 }
 
 // DeletePrefix removes every key under the given prefix.
-func DeletePrefix(ctx context.Context, cli *clientv3.Client, prefix string) error {
+//
+// By default, an empty or root-only ("/") prefix is rejected with
+// ErrUnsafePrefix to prevent accidental cluster-wide deletion. Pass
+// AllowEmptyPrefix() to opt in to that behavior.
+func DeletePrefix(ctx context.Context, cli *clientv3.Client, prefix string, options ...Option) error {
+	o := opts{}
+	for _, opt := range options {
+		opt(&o)
+	}
+	if !o.allowEmptyPrefix && (prefix == "" || prefix == "/") {
+		return fmt.Errorf("%w: prefix=%q", ErrUnsafePrefix, prefix)
+	}
 	if _, err := cli.Delete(ctx, prefix, clientv3.WithPrefix()); err != nil {
 		return fmt.Errorf("etcdwrite: delete prefix %q: %w", prefix, err)
 	}
