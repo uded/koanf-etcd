@@ -232,3 +232,55 @@ func TestOptions_Watch(t *testing.T) {
 		t.Errorf("callbacks not set")
 	}
 }
+
+func TestNew_RejectsNoMode(t *testing.T) {
+	_, err := New(WithEndpoints("x:2379"))
+	if !errors.Is(err, ErrNoMode) {
+		t.Fatalf("want ErrNoMode, got %v", err)
+	}
+}
+
+func TestNew_RejectsBothModes(t *testing.T) {
+	_, err := New(WithEndpoints("x:2379"), WithKey("/a"), WithPrefix("/b/"))
+	if !errors.Is(err, ErrOptionConflict) {
+		t.Fatalf("want ErrOptionConflict, got %v", err)
+	}
+}
+
+func TestNew_RejectsBlobWithoutKey(t *testing.T) {
+	_, err := New(WithEndpoints("x:2379"), WithPrefix("/a/"), WithBlob())
+	if !errors.Is(err, ErrOptionConflict) {
+		t.Fatalf("want ErrOptionConflict, got %v", err)
+	}
+}
+
+func TestNew_RejectsBlobWithUnflatten(t *testing.T) {
+	_, err := New(WithEndpoints("x:2379"), WithKey("/a"), WithBlob(), WithUnflatten(true))
+	if !errors.Is(err, ErrOptionConflict) {
+		t.Fatalf("want ErrOptionConflict, got %v", err)
+	}
+}
+
+func TestNew_RejectsClientWithConnOptions(t *testing.T) {
+	cli := embeddedEtcd(t)
+	_, err := New(WithClient(cli), WithKey("/a"), WithEndpoints("y:2379"))
+	if !errors.Is(err, ErrOptionConflict) {
+		t.Fatalf("want ErrOptionConflict, got %v", err)
+	}
+}
+
+func TestNew_BYOClientNotClosedByProviderClose(t *testing.T) {
+	cli := embeddedEtcd(t)
+	p, err := New(WithClient(cli), WithKey("/sanity"))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	// BYO client should still be usable.
+	ctx := ctxWithTimeout(t, 2*time.Second)
+	if _, err := cli.Put(ctx, "/sanity", "still works"); err != nil {
+		t.Fatalf("BYO client unexpectedly broken: %v", err)
+	}
+}
