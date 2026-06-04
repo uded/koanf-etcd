@@ -25,6 +25,31 @@ func (p *Provider) Read() (map[string]any, error) {
 	return p.readPrefix()
 }
 
+// ReadBytes implements koanf.Provider for blob mode. In blob mode it
+// returns the raw value of the configured key. Outside blob mode it
+// returns ErrNotBlob — use Read() instead.
+func (p *Provider) ReadBytes() ([]byte, error) {
+	if p.closed.Load() {
+		return nil, ErrClosed
+	}
+	if !p.settings.blob {
+		return nil, ErrNotBlob
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), p.settings.readTimeout)
+	defer cancel()
+
+	resp, err := p.client.Get(ctx, p.settings.key, p.readOpts(false)...)
+	if err != nil {
+		return nil, fmt.Errorf("read blob %q: %w", p.settings.key, err)
+	}
+	p.stats.revision.Store(resp.Header.Revision)
+
+	if len(resp.Kvs) == 0 {
+		return nil, fmt.Errorf("%w: key=%q", ErrEmptyPrefix, p.settings.key)
+	}
+	return resp.Kvs[0].Value, nil
+}
+
 // readSingle reads exactly the configured key and returns a nested map
 // based on the koanf path produced by the key transform.
 func (p *Provider) readSingle() (map[string]any, error) {

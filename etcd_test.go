@@ -523,3 +523,45 @@ func TestRead_OnEmptyCallback(t *testing.T) {
 		t.Errorf("onEmpty got prefix %q; want /nope/", gotPrefix)
 	}
 }
+
+func TestRead_BlobReturnsErrUseParser(t *testing.T) {
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 5*time.Second)
+	cli.Put(ctx, "/cfg", `{"a":1}`)
+
+	p, _ := New(WithClient(cli), WithKey("/cfg"), WithBlob(), WithUnflatten(false))
+	t.Cleanup(func() { _ = p.Close() })
+
+	_, err := p.Read()
+	if !errors.Is(err, ErrUseParser) {
+		t.Errorf("want ErrUseParser, got %v", err)
+	}
+}
+
+func TestReadBytes_BlobMode(t *testing.T) {
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 5*time.Second)
+	cli.Put(ctx, "/cfg", `{"a":1}`)
+
+	p, _ := New(WithClient(cli), WithKey("/cfg"), WithBlob(), WithUnflatten(false))
+	t.Cleanup(func() { _ = p.Close() })
+
+	b, err := p.ReadBytes()
+	if err != nil {
+		t.Fatalf("readBytes: %v", err)
+	}
+	if string(b) != `{"a":1}` {
+		t.Errorf("got %q; want %q", b, `{"a":1}`)
+	}
+}
+
+func TestReadBytes_NonBlobReturnsErrNotBlob(t *testing.T) {
+	cli := embeddedEtcd(t)
+	p, _ := New(WithClient(cli), WithKey("/x"))
+	t.Cleanup(func() { _ = p.Close() })
+
+	_, err := p.ReadBytes()
+	if !errors.Is(err, ErrNotBlob) {
+		t.Errorf("want ErrNotBlob, got %v", err)
+	}
+}
