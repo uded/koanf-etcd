@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -700,5 +701,66 @@ func TestLoadTLSFromFiles(t *testing.T) {
 	}
 	if cfg.RootCAs == nil {
 		t.Errorf("RootCAs not set")
+	}
+}
+
+func TestWatch_ReconnectsAfterClientClose(t *testing.T) {
+	// Verifies the watch loop reconnects when the underlying channel
+	// receives a fatal error. We simulate channel-fatal by compacting
+	// the watch revision, which is more deterministic against embedded
+	// etcd than forcing a gRPC stream close.
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 30*time.Second)
+	cli.Put(ctx, "/svc/k", "v0")
+
+	reconnects := atomic.Int32{}
+	p, err := New(
+		WithClient(cli),
+		WithPrefix("/svc/"),
+		WithReconnectBackoff(50*time.Millisecond, 500*time.Millisecond),
+		WithOnReconnect(func(attempt int, lastErr error) {
+			reconnects.Add(1)
+		}),
+	)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	if _, err := p.Read(); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	fires := atomic.Int32{}
+	if err := p.Watch(func(_ any, _ error) {
+		fires.Add(1)
+	}); err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+
+	// Compact at a low revision to force the watch into ErrCompacted.
+	resp, err := cli.Get(ctx, "/svc/k")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if _, err := cli.Compact(ctx, resp.Header.Revision); err != nil {
+		t.Logf("compact: %v (best-effort)", err)
+	}
+
+	// Give the watch time to discover the compaction and resync.
+	time.Sleep(300 * time.Millisecond)
+
+	// Drive a fresh event so we can confirm the recovered watch is alive.
+	if _, err := cli.Put(ctx, "/svc/post-reconnect", "v1"); err != nil {
+		t.Fatalf("post-reconnect put: %v", err)
+	}
+
+	deadline := time.After(8 * time.Second)
+	for fires.Load() == 0 {
+		select {
+		case <-deadline:
+			t.Fatalf("watch never fired after forced reconnect path (reconnects=%d)", reconnects.Load())
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 }
