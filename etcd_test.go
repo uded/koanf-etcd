@@ -484,3 +484,42 @@ func TestRead_PrefixPagination(t *testing.T) {
 		t.Errorf("got %d keys; want 1500", len(m))
 	}
 }
+
+func TestRead_StrictEmptyErrors(t *testing.T) {
+	cli := embeddedEtcd(t)
+	p, _ := New(WithClient(cli), WithPrefix("/nope/"), WithStrict(true))
+	t.Cleanup(func() { _ = p.Close() })
+	_, err := p.Read()
+	if !errors.Is(err, ErrEmptyPrefix) {
+		t.Errorf("want ErrEmptyPrefix, got %v", err)
+	}
+}
+
+func TestRead_OnEmptyCallback(t *testing.T) {
+	cli := embeddedEtcd(t)
+	called := 0
+	var gotPrefix string
+	p, _ := New(
+		WithClient(cli),
+		WithPrefix("/nope/"),
+		OnEmpty(func(prefix string) {
+			called++
+			gotPrefix = prefix
+		}),
+	)
+	t.Cleanup(func() { _ = p.Close() })
+
+	m, err := p.Read()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(m) != 0 {
+		t.Errorf("expected empty map, got %v", m)
+	}
+	if called != 1 {
+		t.Errorf("onEmpty called %d times; want 1", called)
+	}
+	if gotPrefix != "/nope/" {
+		t.Errorf("onEmpty got prefix %q; want /nope/", gotPrefix)
+	}
+}
