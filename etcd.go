@@ -115,27 +115,28 @@ func (p *Provider) Stats() Stats {
 	return p.stats.snapshot()
 }
 
-// validateSettings enforces option-combination invariants.
-func validateSettings(s *settings) error {
-	if s.client != nil {
-		conflict := len(s.endpoints) > 0 ||
-			s.srvService != "" ||
-			s.dialTimeout != 5*time.Second || // non-default
-			s.keepAliveT != 0 ||
-			s.keepAliveTO != 0 ||
-			s.autoSync != 0 ||
-			s.username != "" ||
-			s.password != "" ||
-			s.tlsCfg != nil ||
-			s.tlsCertFile != "" ||
-			s.tlsKeyFile != "" ||
-			s.tlsCAFile != "" ||
-			s.clientCtx != nil
-		if conflict {
-			return fmt.Errorf("%w: WithClient mixed with built-in connection options", ErrOptionConflict)
-		}
-	}
+// hasNonDefaultClientConfig reports whether any built-in client option
+// has been explicitly set. Used by validateSettings to detect
+// `WithClient + WithEndpoints/WithTLS/...` conflicts.
+func hasNonDefaultClientConfig(s *settings) bool {
+	return len(s.endpoints) > 0 ||
+		s.srvService != "" ||
+		s.dialTimeout != 5*time.Second || // non-default
+		s.keepAliveT != 0 ||
+		s.keepAliveTO != 0 ||
+		s.autoSync != 0 ||
+		s.username != "" ||
+		s.password != "" ||
+		s.tlsCfg != nil ||
+		s.tlsCertFile != "" ||
+		s.tlsKeyFile != "" ||
+		s.tlsCAFile != "" ||
+		s.clientCtx != nil
+}
 
+// validateModeSettings enforces the WithKey / WithPrefix / WithBlob /
+// WithUnflatten invariants.
+func validateModeSettings(s *settings) error {
 	hasKey := s.key != ""
 	hasPrefix := s.prefix != ""
 	switch {
@@ -144,20 +145,29 @@ func validateSettings(s *settings) error {
 	case hasKey && hasPrefix:
 		return fmt.Errorf("%w: WithKey and WithPrefix are mutually exclusive", ErrOptionConflict)
 	}
-
-	if s.blob {
-		if !hasKey {
-			return fmt.Errorf("%w: WithBlob requires WithKey", ErrOptionConflict)
-		}
-		if s.unflatten {
-			return fmt.Errorf("%w: WithBlob is incompatible with WithUnflatten(true)", ErrOptionConflict)
-		}
+	if !s.blob {
+		return nil
 	}
+	if !hasKey {
+		return fmt.Errorf("%w: WithBlob requires WithKey", ErrOptionConflict)
+	}
+	if s.unflatten {
+		return fmt.Errorf("%w: WithBlob is incompatible with WithUnflatten(true)", ErrOptionConflict)
+	}
+	return nil
+}
 
+// validateSettings enforces option-combination invariants.
+func validateSettings(s *settings) error {
+	if s.client != nil && hasNonDefaultClientConfig(s) {
+		return fmt.Errorf("%w: WithClient mixed with built-in connection options", ErrOptionConflict)
+	}
+	if err := validateModeSettings(s); err != nil {
+		return err
+	}
 	if s.tlsCfg != nil && (s.tlsCertFile != "" || s.tlsKeyFile != "" || s.tlsCAFile != "") {
 		return fmt.Errorf("%w: WithTLS and WithTLSFiles are mutually exclusive", ErrOptionConflict)
 	}
-
 	return nil
 }
 

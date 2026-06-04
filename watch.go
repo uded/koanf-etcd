@@ -15,70 +15,97 @@ import (
 // establish watch -> dispatch events to cb -> on chan close, reconnect
 // with backoff -> on compaction, resync and resume.
 func (p *Provider) watchLoop(ctx context.Context) {
-	startRev := p.stats.revision.Load()
-	if !p.settings.resumeFromRevision {
-		startRev = 0
-	} else if startRev > 0 {
-		startRev++
-	}
-
+	startRev := p.initialWatchRevision()
 	attempt := 0
 	for {
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil {
 			return
-		default:
 		}
 
-		opts := p.watchOpts(startRev)
-		ch := p.client.Watch(ctx, p.watchKey(), opts...)
+		ch := p.client.Watch(ctx, p.watchKey(), p.watchOpts(startRev)...)
 		attempt = 0
-		if p.settings.onReconnect != nil && p.stats.totalReconnects.Load() > 0 {
-			p.settings.onReconnect(int(p.stats.totalReconnects.Load()), nil)
-		}
 
 		drained, newRev, fatalErr := p.consumeWatch(ctx, ch)
-		if fatalErr != nil {
-			if p.settings.onWatchError != nil {
-				p.settings.onWatchError(fatalErr)
-			}
-			if errors.Is(fatalErr, rpctypes.ErrCompacted) {
-				if resyncRev, err := p.resync(ctx); err == nil {
-					startRev = resyncRev + 1
-					p.stats.totalResyncs.Add(1)
-					p.stats.lastResyncUnix.Store(time.Now().UnixNano())
-					if p.settings.onResync != nil {
-						p.settings.onResync("compaction", resyncRev)
-					}
-					p.deliverResync(resyncRev)
-					continue
-				} else {
-					if p.settings.onWatchError != nil {
-						p.settings.onWatchError(fmt.Errorf("resync: %w", err))
-					}
-				}
-			}
-		}
 
+		if resyncRev, ok := p.tryHandleCompaction(ctx, fatalErr); ok {
+			startRev = resyncRev + 1
+			continue
+		}
 		if drained || ctx.Err() != nil {
 			return
 		}
-
 		if newRev > 0 {
 			startRev = newRev + 1
 		}
 
 		attempt++
-		p.stats.totalReconnects.Add(1)
-		p.stats.lastReconnUnix.Store(time.Now().UnixNano())
-		if p.settings.onReconnect != nil {
-			p.settings.onReconnect(attempt, fatalErr)
-		}
-		select {
-		case <-ctx.Done():
+		p.recordReconnect(attempt, fatalErr)
+		if !p.sleepBackoff(ctx, attempt) {
 			return
-		case <-time.After(backoff(attempt, p.settings.reconnectMin, p.settings.reconnectMax)):
 		}
+	}
+}
+
+// initialWatchRevision computes the revision the watch should start at
+// based on resume-from-revision settings and any prior Read.
+func (p *Provider) initialWatchRevision() int64 {
+	startRev := p.stats.revision.Load()
+	if !p.settings.resumeFromRevision {
+		return 0
+	}
+	if startRev > 0 {
+		startRev++
+	}
+	return startRev
+}
+
+// tryHandleCompaction handles a fatal watch error. If the error is
+// ErrCompacted, it re-reads full state, emits a Resync event, and
+// returns (newRevision, true). Otherwise it returns (0, false).
+// It also invokes the OnWatchError callback for any fatal error.
+func (p *Provider) tryHandleCompaction(ctx context.Context, fatalErr error) (int64, bool) {
+	if fatalErr == nil {
+		return 0, false
+	}
+	if p.settings.onWatchError != nil {
+		p.settings.onWatchError(fatalErr)
+	}
+	if !errors.Is(fatalErr, rpctypes.ErrCompacted) {
+		return 0, false
+	}
+	resyncRev, err := p.resync(ctx)
+	if err != nil {
+		if p.settings.onWatchError != nil {
+			p.settings.onWatchError(fmt.Errorf("resync: %w", err))
+		}
+		return 0, false
+	}
+	p.stats.totalResyncs.Add(1)
+	p.stats.lastResyncUnix.Store(time.Now().UnixNano())
+	if p.settings.onResync != nil {
+		p.settings.onResync("compaction", resyncRev)
+	}
+	p.deliverResync(resyncRev)
+	return resyncRev, true
+}
+
+// recordReconnect updates stats and fires the OnReconnect callback.
+func (p *Provider) recordReconnect(attempt int, lastErr error) {
+	p.stats.totalReconnects.Add(1)
+	p.stats.lastReconnUnix.Store(time.Now().UnixNano())
+	if p.settings.onReconnect != nil {
+		p.settings.onReconnect(attempt, lastErr)
+	}
+}
+
+// sleepBackoff waits the backoff duration or honors ctx cancellation.
+// Returns false if the wait was interrupted by ctx cancel.
+func (p *Provider) sleepBackoff(ctx context.Context, attempt int) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(backoff(attempt, p.settings.reconnectMin, p.settings.reconnectMax)):
+		return true
 	}
 }
 
@@ -132,18 +159,7 @@ func (p *Provider) consumeWatch(ctx context.Context, ch clientv3.WatchChan) (dra
 				pending = append(pending, *e)
 			}
 			if debounceWindow > 0 {
-				if debounceTimer == nil {
-					debounceTimer = time.NewTimer(debounceWindow)
-					timerCh = debounceTimer.C
-				} else {
-					if !debounceTimer.Stop() {
-						select {
-						case <-debounceTimer.C:
-						default:
-						}
-					}
-					debounceTimer.Reset(debounceWindow)
-				}
+				debounceTimer, timerCh = armDebounce(debounceTimer, debounceWindow)
 			} else {
 				flush()
 			}
@@ -152,6 +168,25 @@ func (p *Provider) consumeWatch(ctx context.Context, ch clientv3.WatchChan) (dra
 			timerCh = nil
 		}
 	}
+}
+
+// armDebounce ensures the debounce timer is running with a fresh window.
+// On first call (timer is nil), creates a new timer and returns it plus
+// its channel. On subsequent calls, drains the existing timer (if it
+// already fired) and resets it to window.
+func armDebounce(timer *time.Timer, window time.Duration) (*time.Timer, <-chan time.Time) {
+	if timer == nil {
+		t := time.NewTimer(window)
+		return t, t.C
+	}
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	timer.Reset(window)
+	return timer, timer.C
 }
 
 // translateEvent converts a clientv3 event to our Event, applying filters

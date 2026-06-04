@@ -197,7 +197,7 @@ func TestOptions_BlobAndStrict(t *testing.T) {
 
 func TestOptions_Watch(t *testing.T) {
 	s := newSettings()
-	opts := []Option{
+	for _, opt := range []Option{
 		WithWatchContext(context.Background()),
 		WithDebounce(100 * time.Millisecond),
 		WithReconnectBackoff(500*time.Millisecond, 10*time.Second),
@@ -209,35 +209,33 @@ func TestOptions_Watch(t *testing.T) {
 		WithOnReconnect(func(int, error) {}),
 		WithOnResync(func(string, int64) {}),
 		WithOnWatchError(func(error) {}),
-	}
-	for _, opt := range opts {
+	} {
 		if err := opt(s); err != nil {
 			t.Fatalf("apply: %v", err)
 		}
 	}
-	if s.watchCtx == nil {
-		t.Errorf("watchCtx not set")
+
+	filterOK := s.filterSet && s.wantPut && !s.wantDelete
+	callbacksSet := s.redactor != nil && s.onReconnect != nil && s.onResync != nil && s.onWatchError != nil
+
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"watchCtx set", s.watchCtx != nil},
+		{"debounce=100ms", s.debounce == 100*time.Millisecond},
+		{"reconnectMin=500ms", s.reconnectMin == 500*time.Millisecond},
+		{"reconnectMax=10s", s.reconnectMax == 10*time.Second},
+		{"resumeFromRevision=false", !s.resumeFromRevision},
+		{"progressNotify=true", s.progressNotify},
+		{"filter deliver-puts-only", filterOK},
+		{"createdNotify=true", s.createdNotify},
+		{"callbacks set", callbacksSet},
 	}
-	if s.debounce != 100*time.Millisecond {
-		t.Errorf("debounce: %v", s.debounce)
-	}
-	if s.reconnectMin != 500*time.Millisecond || s.reconnectMax != 10*time.Second {
-		t.Errorf("reconnect: %v/%v", s.reconnectMin, s.reconnectMax)
-	}
-	if s.resumeFromRevision {
-		t.Errorf("resumeFromRevision should be false")
-	}
-	if !s.progressNotify {
-		t.Errorf("progressNotify not set")
-	}
-	if !s.filterSet || !s.wantPut || s.wantDelete {
-		t.Errorf("filters: set=%v put=%v delete=%v", s.filterSet, s.wantPut, s.wantDelete)
-	}
-	if !s.createdNotify {
-		t.Errorf("createdNotify not set")
-	}
-	if s.redactor == nil || s.onReconnect == nil || s.onResync == nil || s.onWatchError == nil {
-		t.Errorf("callbacks not set")
+	for _, c := range checks {
+		if !c.ok {
+			t.Errorf("%s: assertion failed", c.name)
+		}
 	}
 }
 
