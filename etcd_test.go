@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 func TestErrors_AreDistinctSentinels(t *testing.T) {
@@ -563,5 +565,87 @@ func TestReadBytes_NonBlobReturnsErrNotBlob(t *testing.T) {
 	_, err := p.ReadBytes()
 	if !errors.Is(err, ErrNotBlob) {
 		t.Errorf("want ErrNotBlob, got %v", err)
+	}
+}
+
+func TestRead_AuthHappyPath(t *testing.T) {
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 10*time.Second)
+
+	// Set up an authenticated user via the BYO client.
+	if _, err := cli.UserAdd(ctx, "alice", "passw0rd"); err != nil {
+		t.Fatalf("UserAdd: %v", err)
+	}
+	if _, err := cli.RoleAdd(ctx, "reader"); err != nil {
+		t.Fatalf("RoleAdd: %v", err)
+	}
+	if _, err := cli.RoleGrantPermission(ctx, "reader", "/cfg/", "/cfg0", 0 /*Read*/); err != nil {
+		t.Fatalf("RoleGrantPermission: %v", err)
+	}
+	if _, err := cli.UserGrantRole(ctx, "alice", "reader"); err != nil {
+		t.Fatalf("UserGrantRole: %v", err)
+	}
+	// Etcd requires a root user before AuthEnable.
+	if _, err := cli.UserAdd(ctx, "root", "root-pass"); err != nil {
+		t.Fatalf("UserAdd root: %v", err)
+	}
+	if _, err := cli.UserGrantRole(ctx, "root", "root"); err != nil {
+		t.Fatalf("UserGrantRole root: %v", err)
+	}
+	if _, err := cli.AuthEnable(ctx); err != nil {
+		t.Fatalf("AuthEnable: %v", err)
+	}
+	t.Cleanup(func() {
+		// Disable auth so subsequent tests aren't affected if the harness
+		// is ever reused.
+		rootCli, err := clientv3.New(clientv3.Config{
+			Endpoints:   cli.Endpoints(),
+			DialTimeout: 5 * time.Second,
+			Username:    "root",
+			Password:    "root-pass",
+		})
+		if err == nil {
+			_, _ = rootCli.AuthDisable(ctx)
+			_ = rootCli.Close()
+		}
+	})
+
+	// Build a Provider that constructs its own client with auth.
+	p, err := New(
+		WithEndpoints(cli.Endpoints()...),
+		WithAuth("alice", "passw0rd"),
+		WithPrefix("/cfg/"),
+	)
+	if err != nil {
+		t.Fatalf("new (auth): %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	// alice has read permission on /cfg/ — an empty read should succeed
+	// (not error) and return an empty map.
+	m, err := p.Read()
+	if err != nil {
+		t.Fatalf("authed read: %v", err)
+	}
+	if len(m) != 0 {
+		t.Errorf("expected empty map, got %v", m)
+	}
+}
+
+func TestRead_TLS(t *testing.T) {
+	t.Skip("TLS embedded-etcd setup is a larger task; covered by Option-level tests for WithTLS / WithTLSFiles config wiring. End-to-end TLS verified manually against an external cluster pre-release.")
+}
+
+func TestLoadTLSFromFiles(t *testing.T) {
+	f := genTLSFixtures(t)
+	cfg, err := loadTLSFromFiles(f.cliCert, f.cliKey, f.caFile)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(cfg.Certificates) != 1 {
+		t.Errorf("expected 1 cert; got %d", len(cfg.Certificates))
+	}
+	if cfg.RootCAs == nil {
+		t.Errorf("RootCAs not set")
 	}
 }
