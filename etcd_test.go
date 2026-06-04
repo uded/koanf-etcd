@@ -284,3 +284,56 @@ func TestNew_BYOClientNotClosedByProviderClose(t *testing.T) {
 		t.Fatalf("BYO client unexpectedly broken: %v", err)
 	}
 }
+
+func TestTransform_DefaultKey_StripsPrefixAndReplacesSlash(t *testing.T) {
+	s := newSettings()
+	s.prefix = "/svc/"
+	s.delim = "."
+	s.trimPrefix = true
+	xf := makeDefaultKeyTransform(s)
+	cases := map[string]string{
+		"/svc/db/host":         "db.host",
+		"/svc/feature/enabled": "feature.enabled",
+		"/svc/no-slash":        "no-slash",
+	}
+	for in, want := range cases {
+		got := xf(in)
+		if got != want {
+			t.Errorf("xf(%q) = %q; want %q", in, got, want)
+		}
+	}
+}
+
+func TestTransform_DefaultKey_TrimPrefixOff(t *testing.T) {
+	s := newSettings()
+	s.prefix = "/svc/"
+	s.delim = "."
+	s.trimPrefix = false
+	xf := makeDefaultKeyTransform(s)
+	got := xf("/svc/db/host")
+	if got != ".svc.db.host" {
+		t.Errorf("got %q; want %q", got, ".svc.db.host")
+	}
+}
+
+func TestTransform_DefaultKey_CustomDelim(t *testing.T) {
+	s := newSettings()
+	s.prefix = "/svc/"
+	s.delim = "/"
+	s.trimPrefix = true
+	xf := makeDefaultKeyTransform(s)
+	got := xf("/svc/db/host")
+	if got != "db/host" {
+		t.Errorf("got %q; want %q", got, "db/host")
+	}
+}
+
+func TestTransform_DefaultValue_TrimsWhitespace(t *testing.T) {
+	v, err := defaultValueTransform("any", []byte("  http://x\n\t"))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if s, _ := v.(string); s != "http://x" {
+		t.Errorf("got %q; want %q", s, "http://x")
+	}
+}
