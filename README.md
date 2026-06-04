@@ -184,7 +184,7 @@ Each later layer overrides earlier ones for keys it provides.
 
 - **TLS**: pass `*tls.Config` via `WithTLS` or load cert/key/CA files via `WithTLSFiles`. The two are mutually exclusive.
 - **Auth**: `WithAuth("user", "pass")`. Never hardcode — pull from env or a secret manager.
-- **Redaction**: the default redactor returns `"[REDACTED]"`. No value is ever logged. Override with `WithRedactor` only if you have a specific safe transform.
+- **Redaction**: the library does not currently emit log lines that contain etcd values, so the default `WithRedactor` hook (which returns `"[REDACTED]"`) is dormant. The hook exists for forward compatibility — when a future release adds value-touching log lines, or when a caller wraps the provider with a custom logger, the redactor intercepts. Override only if you have a specific safe transform.
 - **BYO client lifecycle**: a BYO client is never closed by the Provider.
 
 ## Atomic multi-key writes

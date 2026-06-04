@@ -3,6 +3,7 @@ package etcd
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -1245,4 +1246,100 @@ func contains(haystack, needle string) bool {
 		}
 	}
 	return false
+}
+
+func TestClose_WaitsForWatchGoroutine(t *testing.T) {
+	cli := embeddedEtcd(t)
+	cli.Put(context.Background(), "/svc/k", "v")
+
+	p, err := New(WithClient(cli), WithPrefix("/svc/"))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	if _, err := p.Read(); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	delivered := make(chan struct{}, 1)
+	if err := p.Watch(func(_ any, _ error) {
+		select {
+		case delivered <- struct{}{}:
+		default:
+		}
+	}); err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+
+	// Drive an event so the loop's hot path is exercised.
+	cli.Put(context.Background(), "/svc/k2", "v")
+	<-delivered
+
+	start := time.Now()
+	if err := p.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	// Close must return promptly when there's nothing blocking the
+	// watch loop. >2s on this path indicates a wait-bug.
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("Close took %v; want < 2s", d)
+	}
+}
+
+func TestClose_HonorsCloseTimeout(t *testing.T) {
+	cli := embeddedEtcd(t)
+	cli.Put(context.Background(), "/svc/k", "v")
+
+	// Install a watch callback that blocks forever to simulate a
+	// wedged consumer. The watch goroutine will be stuck inside
+	// deliverBatch -> cb. Close must still return within timeout.
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) }) // unblock at end of test
+
+	p, err := New(
+		WithClient(cli),
+		WithPrefix("/svc/"),
+		WithCloseTimeout(300*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	if _, err := p.Read(); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if err := p.Watch(func(_ any, _ error) {
+		<-hang
+	}); err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+
+	cli.Put(context.Background(), "/svc/k2", "v") // triggers cb
+
+	start := time.Now()
+	if err := p.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	d := time.Since(start)
+	if d < 200*time.Millisecond || d > 2*time.Second {
+		t.Errorf("Close took %v; want roughly the 300ms timeout, not 0 and not unbounded", d)
+	}
+}
+
+func TestLoadTLSFromFiles_HardensConfig(t *testing.T) {
+	f := genTLSFixtures(t)
+	cfg, err := loadTLSFromFiles(f.cliCert, f.cliKey, f.caFile)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.MinVersion < tls.VersionTLS12 {
+		t.Errorf("MinVersion=%v; want >= TLS 1.2", cfg.MinVersion)
+	}
+}
+
+func TestOptions_WithTLSServerName(t *testing.T) {
+	s := newSettings()
+	if err := WithTLSServerName("etcd.example.com")(s); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if s.tlsServerName != "etcd.example.com" {
+		t.Errorf("tlsServerName=%q; want etcd.example.com", s.tlsServerName)
+	}
 }

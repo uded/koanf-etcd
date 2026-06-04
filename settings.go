@@ -25,10 +25,11 @@ type settings struct {
 	autoSync    time.Duration
 	username    string
 	password    string
-	tlsCfg      *tls.Config
-	tlsCertFile string
-	tlsKeyFile  string
-	tlsCAFile   string
+	tlsCfg        *tls.Config
+	tlsCertFile   string
+	tlsKeyFile    string
+	tlsCAFile     string
+	tlsServerName string
 	clientCtx   context.Context
 	logger      *slog.Logger
 
@@ -68,6 +69,9 @@ type settings struct {
 	onReconnect        func(attempt int, lastErr error)
 	onResync           func(reason string, newRevision int64)
 	onWatchError       func(err error)
+
+	// lifecycle
+	closeTimeout time.Duration // 0 = no timeout; default 5s
 }
 
 // newSettings returns a settings populated with default values. Options
@@ -85,21 +89,44 @@ func newSettings() *settings {
 		reconnectMax:       2 * time.Minute,
 		resumeFromRevision: true,
 		strict:             false,
+		closeTimeout:       5 * time.Second,
 	}
 }
 
 // Stats is a snapshot of provider counters. Read via Provider.Stats().
-// Safe to call from any goroutine, including from inside Watch / WatchTyped
-// callbacks. Fields are atomic snapshots; no cross-field consistency
-// guarantee.
+// Safe to call from any goroutine, including from inside Watch /
+// WatchTyped callbacks. Fields are atomic snapshots; there is no
+// cross-field consistency guarantee.
 type Stats struct {
-	Revision        int64
-	TotalPuts       uint64
-	TotalDeletes    uint64
-	TotalResyncs    uint64
+	// Revision is the most recent etcd revision observed by Read() or
+	// the watch loop. Zero before the first successful Read.
+	Revision int64
+
+	// TotalPuts is the cumulative count of put events delivered to
+	// Watch / WatchTyped callbacks since New().
+	TotalPuts uint64
+
+	// TotalDeletes is the cumulative count of delete events delivered.
+	TotalDeletes uint64
+
+	// TotalResyncs is the cumulative count of full-state re-reads
+	// triggered by etcd compaction.
+	TotalResyncs uint64
+
+	// TotalReconnects is the cumulative count of watch reconnect
+	// attempts, including both successful and backoff-pending ones.
 	TotalReconnects uint64
-	LastEventBatch  int
-	LastResyncAt    time.Time
+
+	// LastEventBatch is the number of events delivered in the most
+	// recent callback invocation. Useful for spotting flush coalescing.
+	LastEventBatch int
+
+	// LastResyncAt is the wall-clock time of the most recent resync.
+	// Zero if no resync has occurred.
+	LastResyncAt time.Time
+
+	// LastReconnectAt is the wall-clock time of the most recent
+	// reconnect attempt. Zero if no reconnect has occurred.
 	LastReconnectAt time.Time
 }
 

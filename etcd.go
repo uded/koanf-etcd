@@ -28,6 +28,7 @@ type Provider struct {
 	watchCancel  context.CancelFunc
 	watchCb      func(any, error)
 	watchTypedCb func([]Event, error)
+	watchDone    chan struct{} // closed by watchLoop on exit; nil when no watch active
 
 	closed atomic.Bool
 }
@@ -88,6 +89,11 @@ func New(opts ...Option) (*Provider, error) {
 // Close stops any active watch and, if the Provider built its own client,
 // closes it. A BYO client supplied via WithClient is not closed.
 // Calling Close more than once is a no-op.
+//
+// Close blocks until the watch goroutine has exited or the configured
+// close timeout elapses (see WithCloseTimeout). A timeout does NOT
+// return an error — the watch is best-effort cancelled and the client
+// is closed regardless, so the caller can proceed with shutdown.
 func (p *Provider) Close() error {
 	if !p.closed.CompareAndSwap(false, true) {
 		return nil
@@ -97,7 +103,31 @@ func (p *Provider) Close() error {
 		p.watchCancel()
 		p.watchCancel = nil
 	}
+	done := p.watchDone
 	p.watchMu.Unlock()
+
+	if done != nil {
+		timeout := p.settings.closeTimeout
+		if timeout <= 0 {
+			<-done
+		} else {
+			select {
+			case <-done:
+			case <-time.After(timeout):
+				// Soft-fail: the watch goroutine didn't exit in time.
+				// We continue with client.Close() so app shutdown isn't
+				// blocked by a wedged callback. The error is not
+				// returned because Close() callers typically log-and-
+				// continue; surface via the logger if available.
+				if p.settings.logger != nil {
+					p.settings.logger.Warn("koanf-etcd: watch goroutine did not exit within close timeout",
+						"timeout", timeout,
+					)
+				}
+			}
+		}
+	}
+
 	if p.ownsClient && p.client != nil {
 		return p.client.Close()
 	}
@@ -203,13 +233,25 @@ func buildClient(s *settings) (*clientv3.Client, error) {
 		cfg.TLS = tlsCfg
 	}
 
+	if cfg.TLS != nil && s.tlsServerName != "" {
+		// Clone the config so we don't mutate a caller-supplied *tls.Config.
+		cloned := cfg.TLS.Clone()
+		cloned.ServerName = s.tlsServerName
+		cfg.TLS = cloned
+	}
+
 	return clientv3.New(cfg)
 }
 
 // loadTLSFromFiles builds a *tls.Config from cert/key/CA file paths.
 // Any of the three may be empty (e.g. server-auth only loads CA).
+// The returned config pins MinVersion to TLS 1.2 — earlier versions are
+// disabled outright; callers that need TLS 1.3-only behaviour should
+// supply their own *tls.Config via WithTLS and set MinVersion there.
 func loadTLSFromFiles(certFile, keyFile, caFile string) (*tls.Config, error) {
-	cfg := &tls.Config{}
+	cfg := &tls.Config{
+		MinVersion: tls.VersionTLS12, // never negotiate TLS 1.0 / 1.1
+	}
 	if certFile != "" && keyFile != "" {
 		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 		if err != nil {
@@ -259,6 +301,7 @@ func (p *Provider) Watch(cb func(event any, err error)) error {
 	ctx, cancel := context.WithCancel(parent)
 	p.watchCancel = cancel
 	p.watchCb = cb
+	p.watchDone = make(chan struct{})
 	go p.watchLoop(ctx)
 	return nil
 }
@@ -277,6 +320,7 @@ func (p *Provider) WatchTyped(ctx context.Context, cb func([]Event, error)) erro
 	loopCtx, cancel := context.WithCancel(ctx)
 	p.watchCancel = cancel
 	p.watchTypedCb = cb
+	p.watchDone = make(chan struct{})
 	go p.watchLoop(loopCtx)
 	return nil
 }
@@ -302,6 +346,8 @@ type Event struct {
 // EventType classifies an Event.
 type EventType int
 
+// Event type values emitted by WatchTyped. EventResync is delivered
+// after a full state re-read following etcd compaction.
 const (
 	// EventPut is delivered when a key is created or updated.
 	EventPut EventType = iota + 1

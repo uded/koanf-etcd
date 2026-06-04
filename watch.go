@@ -22,11 +22,15 @@ import (
 // caller cancels via WithWatchContext and wants to resubscribe without
 // going through Close().
 func (p *Provider) watchLoop(ctx context.Context) {
-	// LIFO order matters: recoverWatchPanic runs FIRST so the panic is
-	// caught while watch state is still live, then clearWatchState resets
-	// the slot so a future Watch() call can install a fresh callback.
+	// LIFO defer order matters:
+	//   1. signalWatchDone runs FIRST — unblocks any Close() waiting on
+	//      <-watchDone before we touch other state.
+	//   2. recoverWatchPanic catches a panic while state is still live.
+	//   3. clearWatchState resets the slot so a future Watch() can install
+	//      a fresh callback after the goroutine exits.
 	defer p.clearWatchState()
 	defer p.recoverWatchPanic("watch loop")
+	defer p.signalWatchDone()
 	startRev := p.initialWatchRevision()
 	attempt := 0
 	for {
@@ -140,6 +144,19 @@ func (p *Provider) clearWatchState() {
 	p.watchCancel = nil
 	p.watchCb = nil
 	p.watchTypedCb = nil
+	p.watchDone = nil
+	p.watchMu.Unlock()
+}
+
+// signalWatchDone closes the watchDone channel so Close() can observe
+// that the watch goroutine has exited. Safe to call once per goroutine
+// lifetime; the channel is allocated in Watch/WatchTyped and replaced
+// with nil by clearWatchState only after this defer runs.
+func (p *Provider) signalWatchDone() {
+	p.watchMu.Lock()
+	if p.watchDone != nil {
+		close(p.watchDone)
+	}
 	p.watchMu.Unlock()
 }
 

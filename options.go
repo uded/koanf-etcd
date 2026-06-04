@@ -89,6 +89,18 @@ func WithTLSFiles(certFile, keyFile, caFile string) Option {
 	}
 }
 
+// WithTLSServerName sets the server name used for TLS SNI and hostname
+// validation. Required when connecting to etcd endpoints by IP address
+// (without this, the etcd cert's SAN must include the literal IP). The
+// value is applied to the *tls.Config produced by WithTLS / WithTLSFiles.
+// Has no effect when WithClient supplies a pre-built client.
+func WithTLSServerName(name string) Option {
+	return func(s *settings) error {
+		s.tlsServerName = name
+		return nil
+	}
+}
+
 // WithLogger sets a *slog.Logger for the provider. Default: slog.Default().
 // The provider never logs values; redacted-by-default. See WithRedactor.
 func WithLogger(l *slog.Logger) Option {
@@ -276,10 +288,15 @@ func WithCreatedNotify(on bool) Option {
 	return func(s *settings) error { s.createdNotify = on; return nil }
 }
 
-// WithRedactor sets a function that produces a safe display string for a
-// (key, value) pair. Used by all internal logging touching values.
-// Default: returns "[REDACTED]". Set to func(k string, raw []byte) string
-// { return string(raw) } to disable redaction (NOT recommended in
+// WithRedactor sets a function that produces a safe display string for
+// a (key, value) pair. The library does not currently emit log lines
+// that contain etcd values — values are only delivered through the
+// Read / Watch return paths, where the caller controls handling.
+// WithRedactor is a forward-compatibility hook: when a future release
+// or a caller wraps the provider with their own logger, the redactor
+// can intercept any value-touching log line. The default redactor
+// returns "[REDACTED]". Set to func(k string, raw []byte) string {
+// return string(raw) } to disable redaction (NOT recommended in
 // production).
 func WithRedactor(fn func(key string, raw []byte) string) Option {
 	return func(s *settings) error { s.redactor = fn; return nil }
@@ -301,4 +318,16 @@ func WithOnResync(fn func(reason string, newRevision int64)) Option {
 // watcher retries.
 func WithOnWatchError(fn func(err error)) Option {
 	return func(s *settings) error { s.onWatchError = fn; return nil }
+}
+
+// WithCloseTimeout bounds how long Close() waits for the watch goroutine
+// to exit before forcing a return. Zero disables the timeout (wait
+// forever). Default is 5s — enough for an in-flight RPC to error out
+// after the context cancels, but short enough that a deadlocked
+// consumer callback doesn't hang application shutdown.
+func WithCloseTimeout(d time.Duration) Option {
+	return func(s *settings) error {
+		s.closeTimeout = d
+		return nil
+	}
 }
