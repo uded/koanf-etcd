@@ -4,6 +4,8 @@ A production-grade [koanf](https://github.com/knadh/koanf) v2 Provider for [etcd
 
 [![CI](https://github.com/uded/koanf-etcd/actions/workflows/ci.yml/badge.svg)](https://github.com/uded/koanf-etcd/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/uded/koanf-etcd.svg)](https://pkg.go.dev/github.com/uded/koanf-etcd)
+[![Go Report Card](https://goreportcard.com/badge/github.com/uded/koanf-etcd)](https://goreportcard.com/report/github.com/uded/koanf-etcd)
+[![Release](https://img.shields.io/github/v/release/uded/koanf-etcd?sort=semver)](https://github.com/uded/koanf-etcd/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## Related projects
