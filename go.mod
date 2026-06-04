@@ -1,6 +1,6 @@
 module github.com/uded/koanf-etcd
 
-go 1.26.4
+go 1.22
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
