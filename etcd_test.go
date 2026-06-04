@@ -1047,3 +1047,63 @@ func TestWatch_RestartAfterCtxCancel(t *testing.T) {
 		}
 	}
 }
+
+func TestRead_PathCollision_LeafVsSubtree(t *testing.T) {
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 5*time.Second)
+	// Seed a leaf "/svc/db" and a sub-tree "/svc/db/host" under the
+	// same prefix. unflatten cannot place both.
+	if _, err := cli.Put(ctx, "/svc/db", "postgres"); err != nil {
+		t.Fatalf("seed leaf: %v", err)
+	}
+	if _, err := cli.Put(ctx, "/svc/db/host", "localhost"); err != nil {
+		t.Fatalf("seed branch: %v", err)
+	}
+	p, err := New(WithClient(cli), WithPrefix("/svc/"))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	_, err = p.Read()
+	if !errors.Is(err, ErrPathCollision) {
+		t.Fatalf("want ErrPathCollision, got %v", err)
+	}
+}
+
+func TestRead_PathCollision_SubtreeVsLeaf(t *testing.T) {
+	// Same situation, opposite map-iteration order — confirms the
+	// error fires regardless of which key the unflatten sees first.
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 5*time.Second)
+	if _, err := cli.Put(ctx, "/svc/db/host", "localhost"); err != nil {
+		t.Fatalf("seed branch: %v", err)
+	}
+	if _, err := cli.Put(ctx, "/svc/db", "postgres"); err != nil {
+		t.Fatalf("seed leaf: %v", err)
+	}
+	p, err := New(WithClient(cli), WithPrefix("/svc/"))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	_, err = p.Read()
+	if !errors.Is(err, ErrPathCollision) {
+		t.Fatalf("want ErrPathCollision, got %v", err)
+	}
+}
+
+func TestUnflattenMap_NoCollision(t *testing.T) {
+	// Sanity: non-colliding paths still produce a nested map without error.
+	flat := map[string]any{"a.b": "1", "a.c": "2", "d": "3"}
+	got, err := unflattenMap(flat, ".")
+	if err != nil {
+		t.Fatalf("unflatten: %v", err)
+	}
+	a, _ := got["a"].(map[string]any)
+	if a["b"] != "1" || a["c"] != "2" {
+		t.Errorf("unexpected nested map: %v", got)
+	}
+	if got["d"] != "3" {
+		t.Errorf("missing leaf d")
+	}
+}

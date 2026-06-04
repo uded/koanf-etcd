@@ -40,7 +40,7 @@ func BenchmarkUnflatten_100Keys(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = unflattenMap(flat, ".")
+		_, _ = unflattenMap(flat, ".")
 	}
 }
 

@@ -89,7 +89,11 @@ func (p *Provider) readSingle(parent context.Context) (map[string]any, error) {
 
 	flat := map[string]any{path: v}
 	if p.settings.unflatten {
-		return unflattenMap(flat, p.settings.delim), nil
+		nested, err := unflattenMap(flat, p.settings.delim)
+		if err != nil {
+			return nil, fmt.Errorf("read: %w", err)
+		}
+		return nested, nil
 	}
 	return flat, nil
 }
@@ -143,6 +147,10 @@ func (p *Provider) readPrefix(parent context.Context) (map[string]any, error) {
 			lastKey = string(kv.Key)
 		}
 
+		if resp.More && len(resp.Kvs) == 0 {
+			return nil, fmt.Errorf("read prefix %q: etcd reported More=true with empty page", p.settings.prefix)
+		}
+
 		first = false
 		more = resp.More && p.settings.limit > 0
 	}
@@ -160,7 +168,11 @@ func (p *Provider) readPrefix(parent context.Context) (map[string]any, error) {
 	}
 
 	if p.settings.unflatten {
-		return unflattenMap(flat, p.settings.delim), nil
+		nested, err := unflattenMap(flat, p.settings.delim)
+		if err != nil {
+			return nil, fmt.Errorf("read: %w", err)
+		}
+		return nested, nil
 	}
 	return flat, nil
 }
@@ -200,33 +212,49 @@ func (p *Provider) readOpts(withPrefix bool) []clientv3.OpOption {
 // unflattenMap turns a flat map keyed by delim-separated paths into a
 // nested map[string]any. Identical semantics to confmap.Provider's
 // internal unflatten.
-func unflattenMap(flat map[string]any, delim string) map[string]any {
+func unflattenMap(flat map[string]any, delim string) (map[string]any, error) {
 	out := make(map[string]any, len(flat))
 	for k, v := range flat {
-		setNested(out, k, v, delim)
+		if err := setNested(out, k, v, delim); err != nil {
+			return nil, err
+		}
 	}
-	return out
+	return out, nil
 }
 
-func setNested(m map[string]any, path string, v any, delim string) {
+func setNested(m map[string]any, path string, v any, delim string) error {
 	if delim == "" {
+		if existing, ok := m[path]; ok {
+			if _, isMap := existing.(map[string]any); isMap {
+				return fmt.Errorf("%w: key=%q would shadow sub-tree", ErrPathCollision, path)
+			}
+		}
 		m[path] = v
-		return
+		return nil
 	}
 	parts := splitPath(path, delim)
 	cur := m
 	for i, p := range parts {
 		if i == len(parts)-1 {
+			if existing, ok := cur[p]; ok {
+				if _, isMap := existing.(map[string]any); isMap {
+					return fmt.Errorf("%w: key=%q would shadow sub-tree", ErrPathCollision, path)
+				}
+			}
 			cur[p] = v
-			return
+			return nil
 		}
 		next, ok := cur[p].(map[string]any)
 		if !ok {
+			if cur[p] != nil {
+				return fmt.Errorf("%w: key=%q parent segment %q is a leaf", ErrPathCollision, path, p)
+			}
 			next = make(map[string]any)
 			cur[p] = next
 		}
 		cur = next
 	}
+	return nil
 }
 
 func splitPath(s, delim string) []string {

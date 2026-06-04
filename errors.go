@@ -27,4 +27,11 @@ var (
 
 	// ErrClosed is returned by methods called after Close().
 	ErrClosed = errors.New("koanf-etcd: provider closed")
+
+	// ErrPathCollision is returned by Read() when two etcd keys
+	// resolve to paths where one is a prefix of the other (e.g. both
+	// `/svc/db` and `/svc/db/host` exist under the same prefix). The
+	// nested-map representation cannot hold both a leaf value and a
+	// sub-map at the same path.
+	ErrPathCollision = errors.New("koanf-etcd: path collision: a key value cannot coexist with a sub-tree at the same path")
 )
