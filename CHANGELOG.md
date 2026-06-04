@@ -1,0 +1,48 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+
+- Initial release of `koanf-etcd`, a production-grade koanf v2 Provider for etcd v3.
+- `Provider` with tree mode (`WithPrefix`), single-key mode (`WithKey`), and blob mode (`WithBlob`).
+- Nested output by default (unflattens on configurable delimiter); prefix is trimmed; string values are `TrimSpace`'d.
+- Bring-your-own `*clientv3.Client` via `WithClient`; not closed by the Provider.
+- TLS via `WithTLS(*tls.Config)` or `WithTLSFiles(cert,key,ca)`.
+- Auth via `WithAuth(user, pass)`.
+- SRV/DNS endpoint discovery via `WithEndpointsFromSRV`.
+- Serializable reads (`WithSerializable`), read-at-revision (`WithReadRevision`).
+- Pagination for large prefixes (`WithLimit`).
+- Strict-empty (`WithStrict`) and `OnEmpty` callback.
+- `Watch(cb)` (koanf-compat, nil event) and `WatchTyped(ctx, cb)` ([]Event payload).
+- Resume-from-revision (no read/watch gap), bounded exponential backoff reconnect, compaction-triggered resync.
+- Debounce (`WithDebounce`), `WithProgressNotify`, `WithEventFilter`, `WithCreatedNotify`.
+- Observability callbacks: `WithOnReconnect`, `WithOnResync`, `WithOnWatchError`.
+- `Provider.Revision()` and `Provider.Stats()` accessors.
+- Optional `etcdwrite` subpackage: `Put`, `Delete`, `DeletePrefix`, `PutAll` (atomic via etcd transaction).
+- GitHub Actions CI: lint (gofmt, vet, staticcheck), test (Go 1.23/1.24 matrix, `-race`), `govulncheck`, build.
+- Hermetic tests against embedded etcd via `go.etcd.io/etcd/server/v3/embed`.
+
+### Pinned
+
+- `go.etcd.io/etcd/client/v3 v3.5.17`
+- `go.etcd.io/etcd/api/v3 v3.5.17`
+- Go 1.23+
+
+### Known issues
+
+- `govulncheck` may flag advisories from etcd v3.5.17's transitive `google.golang.org/grpc` dep (e.g. GHSA-xr7q-jx4m-x55m). The Provider is call-graph-aware so symbols we don't reach are not exploitable, but the CI vuln job may surface findings until upstream etcd ships a patch release with an updated grpc.
+
+### Deferred to future releases (filed as issues)
+
+- Arbitrary `WithRange(start, end)`.
+- `RejectOldCluster`.
+- `MaxCallSendMsgSize` / `MaxCallRecvMsgSize`.
+- `PermitWithoutStream`.
+- End-to-end TLS integration test against embedded etcd (currently covered by Option-level tests + `loadTLSFromFiles` unit test).
+- Nightly CI matrix entry for etcd 3.6 client.
