@@ -127,7 +127,10 @@ func genTLSFixtures(t *testing.T) tlsFixture {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate ca key: %v", err)
+	}
 	caTmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "test-ca"},
@@ -137,12 +140,18 @@ func genTLSFixtures(t *testing.T) tlsFixture {
 		KeyUsage:              x509.KeyUsageCertSign,
 		BasicConstraintsValid: true,
 	}
-	caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create ca cert: %v", err)
+	}
 	caFile := filepath.Join(dir, "ca.pem")
 	writePEM(t, caFile, "CERTIFICATE", caDER)
 
 	makeLeaf := func(cn string, isServer bool) (string, string) {
-		key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatalf("generate %s key: %v", cn, err)
+		}
 		tmpl := &x509.Certificate{
 			SerialNumber: big.NewInt(time.Now().UnixNano()),
 			Subject:      pkix.Name{CommonName: cn},
@@ -157,11 +166,17 @@ func genTLSFixtures(t *testing.T) tlsFixture {
 		} else {
 			tmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
 		}
-		der, _ := x509.CreateCertificate(rand.Reader, tmpl, caTmpl, &key.PublicKey, caKey)
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, caTmpl, &key.PublicKey, caKey)
+		if err != nil {
+			t.Fatalf("create %s cert: %v", cn, err)
+		}
 		certFile := filepath.Join(dir, cn+".pem")
 		keyFile := filepath.Join(dir, cn+".key")
 		writePEM(t, certFile, "CERTIFICATE", der)
-		keyDER, _ := x509.MarshalECPrivateKey(key)
+		keyDER, err := x509.MarshalECPrivateKey(key)
+		if err != nil {
+			t.Fatalf("marshal %s key: %v", cn, err)
+		}
 		writePEM(t, keyFile, "EC PRIVATE KEY", keyDER)
 		return certFile, keyFile
 	}
