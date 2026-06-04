@@ -39,7 +39,7 @@ func TestMain(m *testing.M) {
 // embeddedEtcd boots a single-node embedded etcd on random localhost ports
 // and returns a connected clientv3.Client plus a teardown func. The
 // teardown is registered with t.Cleanup so callers don't need to defer it.
-func embeddedEtcd(t *testing.T) *clientv3.Client {
+func embeddedEtcd(t testing.TB) *clientv3.Client {
 	t.Helper()
 
 	dir, err := os.MkdirTemp("", "koanf-etcd-test-*")
@@ -93,8 +93,16 @@ func embeddedEtcd(t *testing.T) *clientv3.Client {
 	return cli
 }
 
+// embeddedEtcdB is a thin alias for embeddedEtcd that takes *testing.B.
+// It exists so benchmarks read naturally; embeddedEtcd already accepts
+// testing.TB.
+func embeddedEtcdB(b *testing.B) *clientv3.Client {
+	b.Helper()
+	return embeddedEtcd(b)
+}
+
 // pickAddr finds a free localhost TCP port and returns "127.0.0.1:N".
-func pickAddr(t *testing.T) string {
+func pickAddr(t testing.TB) string {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -118,7 +126,7 @@ type tlsFixture struct {
 
 // genTLSFixtures generates a self-signed CA, server cert/key, and client
 // cert/key, writing them to a temp dir. Returns the paths.
-func genTLSFixtures(t *testing.T) tlsFixture {
+func genTLSFixtures(t testing.TB) tlsFixture {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "koanf-etcd-tls-*")
 	if err != nil {
@@ -193,7 +201,7 @@ func genTLSFixtures(t *testing.T) tlsFixture {
 	}
 }
 
-func writePEM(t *testing.T, path, typ string, der []byte) {
+func writePEM(t testing.TB, path, typ string, der []byte) {
 	t.Helper()
 	f, err := os.Create(path)
 	if err != nil {
@@ -207,7 +215,7 @@ func writePEM(t *testing.T, path, typ string, der []byte) {
 
 // ctxWithTimeout returns a context with the given timeout and registers
 // cancel via t.Cleanup.
-func ctxWithTimeout(t *testing.T, d time.Duration) context.Context {
+func ctxWithTimeout(t testing.TB, d time.Duration) context.Context {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	t.Cleanup(cancel)
