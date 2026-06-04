@@ -212,6 +212,19 @@ func WithDebounce(window time.Duration) Option {
 	return func(s *settings) error { s.debounce = window; return nil }
 }
 
+// WithMaxPendingEvents caps how many debounced events the watch loop
+// will buffer between flushes. When the cap is reached an early flush
+// fires regardless of the debounce window. 0 disables the cap. Default
+// is 10 000 — at typical event sizes that's a few MB of retained
+// memory, enough for legitimate bursts but a guard against unbounded
+// growth under a stuck consumer.
+func WithMaxPendingEvents(n int) Option {
+	return func(s *settings) error {
+		s.maxPendingEvents = n
+		return nil
+	}
+}
+
 // WithReconnectBackoff sets the bounds for exponential backoff (with full
 // jitter) used when the watch channel closes. Default min=1s, max=2min.
 func WithReconnectBackoff(min, max time.Duration) Option {

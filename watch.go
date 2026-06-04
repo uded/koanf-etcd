@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
+	mathrand "math/rand/v2"
 	"time"
 
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // watchLoop runs in its own goroutine. It owns the watch lifecycle:
@@ -20,12 +22,23 @@ import (
 // caller cancels via WithWatchContext and wants to resubscribe without
 // going through Close().
 func (p *Provider) watchLoop(ctx context.Context) {
+	// LIFO order matters: recoverWatchPanic runs FIRST so the panic is
+	// caught while watch state is still live, then clearWatchState resets
+	// the slot so a future Watch() call can install a fresh callback.
 	defer p.clearWatchState()
+	defer p.recoverWatchPanic("watch loop")
 	startRev := p.initialWatchRevision()
 	attempt := 0
 	for {
 		if ctx.Err() != nil {
 			return
+		}
+
+		if p.settings.logger != nil && attempt > 0 {
+			p.settings.logger.Info("koanf-etcd: watch reconnecting",
+				"attempt", attempt,
+				"start_revision", startRev,
+			)
 		}
 
 		ch := p.client.Watch(ctx, p.watchKey(), p.watchOpts(startRev)...)
@@ -43,6 +56,17 @@ func (p *Provider) watchLoop(ctx context.Context) {
 			startRev = resyncRev + 1
 			attempt = 0 // resync IS progress — restart cleanly
 			continue
+		}
+		if isFatalRPCError(fatalErr) {
+			if p.settings.logger != nil {
+				p.settings.logger.Error("koanf-etcd: fatal watch error; not retrying",
+					"err", fatalErr.Error(),
+				)
+			}
+			if p.settings.onWatchError != nil {
+				p.settings.onWatchError(fmt.Errorf("koanf-etcd: fatal: %w", fatalErr))
+			}
+			return
 		}
 		if drained || ctx.Err() != nil {
 			return
@@ -98,6 +122,11 @@ func (p *Provider) tryHandleCompaction(ctx context.Context, fatalErr error) (int
 	if p.settings.onResync != nil {
 		p.settings.onResync("compaction", resyncRev)
 	}
+	if p.settings.logger != nil {
+		p.settings.logger.Warn("koanf-etcd: compaction recovery — resynced",
+			"new_revision", resyncRev,
+		)
+	}
 	p.deliverResync(resyncRev)
 	return resyncRev, true
 }
@@ -120,6 +149,12 @@ func (p *Provider) recordReconnect(attempt int, lastErr error) {
 	p.stats.lastReconnUnix.Store(time.Now().UnixNano())
 	if p.settings.onReconnect != nil {
 		p.settings.onReconnect(attempt, lastErr)
+	}
+	if p.settings.logger != nil {
+		p.settings.logger.Warn("koanf-etcd: scheduling reconnect",
+			"attempt", attempt,
+			"last_err", errString(lastErr),
+		)
 	}
 }
 
@@ -151,8 +186,17 @@ func (p *Provider) consumeWatch(ctx context.Context, ch clientv3.WatchChan) (dra
 		if len(pending) == 0 {
 			return
 		}
-		batch := pending
+		// Copy out so the caller's batch is independent from the
+		// pending backing array. Without this, the next append(pending,...)
+		// can mutate batch[i] if cap(pending) was large enough.
+		batch := make([]Event, len(pending))
+		copy(batch, pending)
 		pending = pending[:0]
+		// Optional: trim backing array if it grew far beyond the high
+		// water mark to release memory back to the runtime.
+		if cap(pending) > 4*len(batch) && cap(pending) > 1024 {
+			pending = nil
+		}
 		p.deliverBatch(batch)
 	}
 	defer func() {
@@ -185,6 +229,22 @@ func (p *Provider) consumeWatch(ctx context.Context, ch clientv3.WatchChan) (dra
 					continue
 				}
 				pending = append(pending, *e)
+			}
+			if p.settings.maxPendingEvents > 0 && len(pending) >= p.settings.maxPendingEvents {
+				// Force-flush before the debounce window closes; a
+				// stuck consumer or an event flood can't grow pending
+				// unboundedly.
+				flush()
+				// Stop the debounce timer if it was running; it will
+				// be re-armed when the next event arrives.
+				if debounceTimer != nil && !debounceTimer.Stop() {
+					select {
+					case <-debounceTimer.C:
+					default:
+					}
+				}
+				timerCh = nil
+				continue
 			}
 			if debounceWindow > 0 {
 				debounceTimer, timerCh = armDebounce(debounceTimer, debounceWindow)
@@ -247,6 +307,7 @@ func (p *Provider) translateEvent(ev *clientv3.Event) *Event {
 
 // deliverBatch dispatches a batch to whichever callback is registered.
 func (p *Provider) deliverBatch(batch []Event) {
+	defer p.recoverWatchPanic("watch callback")
 	p.stats.lastBatch.Store(int32(len(batch)))
 	p.watchMu.Lock()
 	cb := p.watchCb
@@ -316,15 +377,81 @@ func (p *Provider) watchOpts(startRev int64) []clientv3.OpOption {
 	return opts
 }
 
-// backoff returns an exponential-with-full-jitter duration for the given
-// attempt (1-indexed), bounded by min..max.
+// backoff returns a duration in [min, exp] where exp doubles per attempt
+// (capped at max). attempt is 1-indexed. Uses full-jitter style but
+// guarantees never returning less than min — a flapping cluster must
+// not be hammered sub-min between reconnect attempts.
 func backoff(attempt int, min, max time.Duration) time.Duration {
 	if attempt < 1 {
 		attempt = 1
 	}
 	exp := min << (attempt - 1)
-	if exp <= 0 || exp > max {
+	if exp <= 0 || exp > max { // overflow or above ceiling
 		exp = max
 	}
-	return time.Duration(rand.Int63n(int64(exp) + 1))
+	if exp <= min {
+		return min
+	}
+	// rand.Int64N in math/rand/v2 is lock-free per goroutine, vs the
+	// global mutex on math/rand v1. Range [min, exp].
+	return min + time.Duration(mathrand.Int64N(int64(exp-min)+1))
+}
+
+// recoverWatchPanic catches a panic in the watch goroutine or in a
+// user-supplied callback. The library is embedded in production
+// processes; we must not let a buggy callback take down the host.
+// Routes the panic via the logger, the OnWatchError hook, and updates
+// stats so consumers can detect the event.
+func (p *Provider) recoverWatchPanic(site string) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	err := fmt.Errorf("koanf-etcd: panic in %s: %v", site, r)
+	if p.settings.logger != nil {
+		p.settings.logger.Error("koanf-etcd: panic recovered in watch path",
+			"site", site,
+			"panic", fmt.Sprint(r),
+		)
+	}
+	if p.settings.onWatchError != nil {
+		// Best-effort notify — guard against panicking callback inside
+		// the callback by NOT installing another recover here; if the
+		// onWatchError handler panics, the host process gets it.
+		func() {
+			defer func() { _ = recover() }()
+			p.settings.onWatchError(err)
+		}()
+	}
+}
+
+// isFatalRPCError reports whether the watch session error is permanent
+// and a retry loop would just hammer the cluster forever. PermissionDenied
+// and Unauthenticated typically mean RBAC misconfig or expired
+// credentials — neither resolves on its own.
+func isFatalRPCError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, rpctypes.ErrPermissionDenied) ||
+		errors.Is(err, rpctypes.ErrUserNotFound) ||
+		errors.Is(err, rpctypes.ErrAuthFailed) ||
+		errors.Is(err, rpctypes.ErrInvalidAuthToken) {
+		return true
+	}
+	if st, ok := status.FromError(err); ok {
+		switch st.Code() {
+		case codes.PermissionDenied, codes.Unauthenticated:
+			return true
+		}
+	}
+	return false
+}
+
+// errString gives a safe string form of an error, including nil.
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }

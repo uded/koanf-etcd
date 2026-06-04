@@ -1107,3 +1107,142 @@ func TestUnflattenMap_NoCollision(t *testing.T) {
 		t.Errorf("missing leaf d")
 	}
 }
+
+func TestBackoff_HonorsMinFloor(t *testing.T) {
+	min := 100 * time.Millisecond
+	max := 5 * time.Second
+	for attempt := 1; attempt <= 8; attempt++ {
+		for i := 0; i < 50; i++ {
+			d := backoff(attempt, min, max)
+			if d < min {
+				t.Errorf("attempt=%d sample=%d: backoff=%v < min=%v", attempt, i, d, min)
+			}
+			if d > max {
+				t.Errorf("attempt=%d sample=%d: backoff=%v > max=%v", attempt, i, d, max)
+			}
+		}
+	}
+}
+
+func TestBackoff_HandlesOverflow(t *testing.T) {
+	// Very large attempts must clamp to max, not wrap.
+	d := backoff(64, time.Second, 30*time.Second)
+	if d < time.Second || d > 30*time.Second {
+		t.Errorf("attempt=64: backoff=%v out of [1s, 30s]", d)
+	}
+	d = backoff(1000, time.Second, 30*time.Second)
+	if d < time.Second || d > 30*time.Second {
+		t.Errorf("attempt=1000: backoff=%v out of [1s, 30s]", d)
+	}
+}
+
+func TestBackoff_MinEqualsMax(t *testing.T) {
+	d := backoff(1, 2*time.Second, 2*time.Second)
+	if d != 2*time.Second {
+		t.Errorf("min==max: backoff=%v want 2s", d)
+	}
+}
+
+func TestArmDebounce_FirstCallCreates(t *testing.T) {
+	timer, ch := armDebounce(nil, 50*time.Millisecond)
+	if timer == nil {
+		t.Fatal("expected non-nil timer on first call")
+	}
+	if ch == nil {
+		t.Fatal("expected non-nil channel on first call")
+	}
+	select {
+	case <-ch:
+		// fired — good
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timer never fired")
+	}
+	timer.Stop()
+}
+
+func TestArmDebounce_ResetOnExpired(t *testing.T) {
+	// First call creates and lets fire so the channel is drained.
+	timer, ch := armDebounce(nil, 20*time.Millisecond)
+	<-ch
+	// Second call must drain the fired channel and re-arm.
+	timer, ch = armDebounce(timer, 20*time.Millisecond)
+	select {
+	case <-ch:
+		// good — re-armed and fired
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("re-armed timer never fired")
+	}
+	timer.Stop()
+}
+
+func TestArmDebounce_ResetOnLive(t *testing.T) {
+	// First call creates a long timer that won't fire on its own.
+	timer, _ := armDebounce(nil, 5*time.Second)
+	// Reset to a short window — the long timer should be stopped and
+	// the short one should fire.
+	timer, ch := armDebounce(timer, 20*time.Millisecond)
+	select {
+	case <-ch:
+		// good
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("reset timer never fired")
+	}
+	timer.Stop()
+}
+
+func TestWatch_PanicInCallbackDoesNotCrash(t *testing.T) {
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 10*time.Second)
+	cli.Put(ctx, "/svc/k", "v0")
+
+	errCh := make(chan error, 1)
+	p, err := New(
+		WithClient(cli),
+		WithPrefix("/svc/"),
+		WithOnWatchError(func(err error) {
+			select {
+			case errCh <- err:
+			default:
+			}
+		}),
+	)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	if _, err := p.Read(); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// Install a callback that panics on every invocation.
+	if err := p.Watch(func(_ any, _ error) {
+		panic("intentional test panic")
+	}); err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+
+	// Drive an event.
+	if _, err := cli.Put(ctx, "/svc/k2", "v1"); err != nil {
+		t.Fatalf("trigger: %v", err)
+	}
+
+	// The OnWatchError hook should fire with a "panic" error.
+	select {
+	case got := <-errCh:
+		if got == nil || !contains(got.Error(), "panic") {
+			t.Fatalf("expected panic-classified error, got %v", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("OnWatchError never fired after panic; process likely would have crashed without recovery")
+	}
+}
+
+// contains is a tiny strings.Contains shim avoiding an import here.
+func contains(haystack, needle string) bool {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return true
+		}
+	}
+	return false
+}

@@ -55,6 +55,7 @@ type settings struct {
 	// watch
 	watchCtx           context.Context
 	debounce           time.Duration
+	maxPendingEvents   int // 0 = unbounded (legacy), positive = force flush at threshold
 	reconnectMin       time.Duration
 	reconnectMax       time.Duration
 	resumeFromRevision bool
@@ -79,6 +80,7 @@ func newSettings() *settings {
 		unflatten:          true,
 		readTimeout:        5 * time.Second,
 		debounce:           0,
+		maxPendingEvents:   10000,
 		reconnectMin:       1 * time.Second,
 		reconnectMax:       2 * time.Minute,
 		resumeFromRevision: true,
