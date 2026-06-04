@@ -23,12 +23,19 @@ func (p *Provider) watchLoop(ctx context.Context) {
 		}
 
 		ch := p.client.Watch(ctx, p.watchKey(), p.watchOpts(startRev)...)
-		attempt = 0
+		drained, newRev, madeProgress, fatalErr := p.consumeWatch(ctx, ch)
 
-		drained, newRev, fatalErr := p.consumeWatch(ctx, ch)
+		// Reset attempt only when the session actually delivered events.
+		// A session that fails immediately (no responses) keeps the
+		// previous attempt count so backoff escalates properly toward
+		// reconnectMax instead of pinning at min.
+		if madeProgress {
+			attempt = 0
+		}
 
 		if resyncRev, ok := p.tryHandleCompaction(ctx, fatalErr); ok {
 			startRev = resyncRev + 1
+			attempt = 0 // resync IS progress — restart cleanly
 			continue
 		}
 		if drained || ctx.Err() != nil {
@@ -114,9 +121,11 @@ func (p *Provider) sleepBackoff(ctx context.Context, attempt int) bool {
 //
 //   - drained: true if ctx was cancelled (caller should exit).
 //   - newRev:  last observed revision (for resume on reconnect).
+//   - madeProgress: true if the session received at least one non-error
+//     response — signals to watchLoop that backoff should reset.
 //   - fatalErr: a non-nil terminating error from the channel (compaction
 //     or otherwise).
-func (p *Provider) consumeWatch(ctx context.Context, ch clientv3.WatchChan) (drained bool, newRev int64, fatalErr error) {
+func (p *Provider) consumeWatch(ctx context.Context, ch clientv3.WatchChan) (drained bool, newRev int64, madeProgress bool, fatalErr error) {
 	debounceWindow := p.settings.debounce
 	var debounceTimer *time.Timer
 	pending := []Event{}
@@ -139,14 +148,15 @@ func (p *Provider) consumeWatch(ctx context.Context, ch clientv3.WatchChan) (dra
 	for {
 		select {
 		case <-ctx.Done():
-			return true, newRev, nil
+			return true, newRev, madeProgress, nil
 		case resp, ok := <-ch:
 			if !ok {
-				return false, newRev, nil
+				return false, newRev, madeProgress, nil
 			}
 			if err := resp.Err(); err != nil {
-				return false, newRev, err
+				return false, newRev, madeProgress, err
 			}
+			madeProgress = true
 			if resp.Header.Revision > newRev {
 				newRev = resp.Header.Revision
 				p.stats.revision.Store(newRev)
