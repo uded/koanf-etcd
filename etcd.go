@@ -241,11 +241,14 @@ func defaultRedactor(key string, raw []byte) string {
 // should use WatchTyped. Calling Watch when a watch is already active
 // returns an error.
 func (p *Provider) Watch(cb func(event any, err error)) error {
+	p.watchMu.Lock()
+	defer p.watchMu.Unlock()
+	// Check closed under the lock so Close (which CASes closed then
+	// acquires watchMu) can't race a fresh Watch into a half-closed
+	// Provider.
 	if p.closed.Load() {
 		return ErrClosed
 	}
-	p.watchMu.Lock()
-	defer p.watchMu.Unlock()
 	if p.watchCancel != nil {
 		return fmt.Errorf("koanf-etcd: watch already active")
 	}
@@ -263,11 +266,11 @@ func (p *Provider) Watch(cb func(event any, err error)) error {
 // WatchTyped delivers []Event batches to cb. ctx cancels the watcher.
 // Mutually exclusive with Watch().
 func (p *Provider) WatchTyped(ctx context.Context, cb func([]Event, error)) error {
+	p.watchMu.Lock()
+	defer p.watchMu.Unlock()
 	if p.closed.Load() {
 		return ErrClosed
 	}
-	p.watchMu.Lock()
-	defer p.watchMu.Unlock()
 	if p.watchCancel != nil {
 		return fmt.Errorf("koanf-etcd: watch already active")
 	}

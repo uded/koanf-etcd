@@ -14,7 +14,13 @@ import (
 // watchLoop runs in its own goroutine. It owns the watch lifecycle:
 // establish watch -> dispatch events to cb -> on chan close, reconnect
 // with backoff -> on compaction, resync and resume.
+//
+// On return, the loop clears its watch-state slot so a subsequent call
+// to Watch/WatchTyped can install a fresh callback — important when the
+// caller cancels via WithWatchContext and wants to resubscribe without
+// going through Close().
 func (p *Provider) watchLoop(ctx context.Context) {
+	defer p.clearWatchState()
 	startRev := p.initialWatchRevision()
 	attempt := 0
 	for {
@@ -94,6 +100,18 @@ func (p *Provider) tryHandleCompaction(ctx context.Context, fatalErr error) (int
 	}
 	p.deliverResync(resyncRev)
 	return resyncRev, true
+}
+
+// clearWatchState resets the per-watch slot under watchMu so a future
+// Watch/WatchTyped call can succeed even though the previous watcher
+// exited via its parent ctx (rather than Close). Safe to call when the
+// Provider has already been Closed — fields are reassigned to nil only.
+func (p *Provider) clearWatchState() {
+	p.watchMu.Lock()
+	p.watchCancel = nil
+	p.watchCb = nil
+	p.watchTypedCb = nil
+	p.watchMu.Unlock()
 }
 
 // recordReconnect updates stats and fires the OnReconnect callback.
