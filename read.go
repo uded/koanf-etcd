@@ -58,10 +58,91 @@ func (p *Provider) readSingle() (map[string]any, error) {
 	return flat, nil
 }
 
-// readPrefix is the prefix-mode implementation. Stub for Task 10 — full
-// implementation lands in the prefix-mode task.
+// readPrefix performs a (paginated) prefix read and returns either a flat
+// or nested map depending on settings.unflatten.
 func (p *Provider) readPrefix() (map[string]any, error) {
-	return nil, fmt.Errorf("koanf-etcd: prefix mode Read not yet implemented")
+	flat := map[string]any{}
+	var lastRev int64
+	var lastKey string
+	more := true
+	first := true
+
+	for more {
+		ctx, cancel := context.WithTimeout(context.Background(), p.settings.readTimeout)
+		var opts []clientv3.OpOption
+		var key string
+		if first {
+			key = p.settings.prefix
+			opts = append(opts, clientv3.WithPrefix())
+		} else {
+			// Paginate from lastKey+\x00 through the end of the prefix range.
+			key = lastKey + "\x00"
+			opts = append(opts, clientv3.WithRange(prefixEnd(p.settings.prefix)))
+		}
+		if p.settings.serializable {
+			opts = append(opts, clientv3.WithSerializable())
+		}
+		if p.settings.readRevision > 0 {
+			opts = append(opts, clientv3.WithRev(p.settings.readRevision))
+		}
+		if p.settings.limit > 0 {
+			opts = append(opts, clientv3.WithLimit(p.settings.limit))
+			opts = append(opts, clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend))
+		}
+
+		resp, err := p.client.Get(ctx, key, opts...)
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("read prefix %q: %w", p.settings.prefix, err)
+		}
+		lastRev = resp.Header.Revision
+
+		for _, kv := range resp.Kvs {
+			v, err := p.settings.valueTransform(string(kv.Key), kv.Value)
+			if err != nil {
+				return nil, fmt.Errorf("value transform %q: %w", kv.Key, err)
+			}
+			path := p.settings.keyTransform(string(kv.Key))
+			flat[path] = v
+			lastKey = string(kv.Key)
+		}
+
+		first = false
+		more = resp.More && p.settings.limit > 0
+	}
+
+	p.stats.revision.Store(lastRev)
+
+	if len(flat) == 0 {
+		if p.settings.strict {
+			return nil, fmt.Errorf("%w: prefix=%q", ErrEmptyPrefix, p.settings.prefix)
+		}
+		if p.settings.onEmpty != nil {
+			p.settings.onEmpty(p.settings.prefix)
+		}
+		return map[string]any{}, nil
+	}
+
+	if p.settings.unflatten {
+		return unflattenMap(flat, p.settings.delim), nil
+	}
+	return flat, nil
+}
+
+// prefixEnd returns the smallest byte string strictly greater than every
+// key with the given prefix. Mirrors etcd clientv3's internal helper.
+func prefixEnd(prefix string) string {
+	if prefix == "" {
+		return "\x00"
+	}
+	b := []byte(prefix)
+	for i := len(b) - 1; i >= 0; i-- {
+		if b[i] < 0xff {
+			b[i]++
+			return string(b[:i+1])
+		}
+	}
+	return "\x00"
 }
 
 // readOpts builds clientv3.OpOption based on settings. The `withPrefix`

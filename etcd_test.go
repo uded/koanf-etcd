@@ -3,6 +3,7 @@ package etcd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -400,5 +401,86 @@ func TestRead_RecordsRevision(t *testing.T) {
 	}
 	if p.Revision() == 0 {
 		t.Errorf("Revision() = 0 after Read; want > 0")
+	}
+}
+
+func TestRead_PrefixNestedTrimmed(t *testing.T) {
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 5*time.Second)
+	seed := map[string]string{
+		"/svc/db.host":    "localhost",
+		"/svc/db.port":    "5432",
+		"/svc/feature.on": "true",
+	}
+	for k, v := range seed {
+		if _, err := cli.Put(ctx, k, v); err != nil {
+			t.Fatalf("seed %s: %v", k, err)
+		}
+	}
+
+	p, err := New(WithClient(cli), WithPrefix("/svc/"))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	m, err := p.Read()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	db, _ := m["db"].(map[string]any)
+	if db["host"] != "localhost" {
+		t.Errorf("db.host = %v; want localhost", db["host"])
+	}
+	if db["port"] != "5432" {
+		t.Errorf("db.port = %v; want 5432", db["port"])
+	}
+	feature, _ := m["feature"].(map[string]any)
+	if feature["on"] != "true" {
+		t.Errorf("feature.on = %v; want true", feature["on"])
+	}
+}
+
+func TestRead_PrefixUnflattenOff(t *testing.T) {
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 5*time.Second)
+	cli.Put(ctx, "/svc/db.host", "localhost")
+	cli.Put(ctx, "/svc/db.port", "5432")
+
+	p, _ := New(WithClient(cli), WithPrefix("/svc/"), WithUnflatten(false))
+	t.Cleanup(func() { _ = p.Close() })
+
+	m, err := p.Read()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if m["db.host"] != "localhost" || m["db.port"] != "5432" {
+		t.Errorf("expected flat keys; got %v", m)
+	}
+}
+
+func TestRead_PrefixPagination(t *testing.T) {
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 30*time.Second)
+	for i := 0; i < 1500; i++ {
+		key := fmt.Sprintf("/big/k%05d", i)
+		if _, err := cli.Put(ctx, key, fmt.Sprintf("v%d", i)); err != nil {
+			t.Fatalf("seed %d: %v", i, err)
+		}
+	}
+
+	p, err := New(WithClient(cli), WithPrefix("/big/"), WithLimit(250), WithUnflatten(false))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	m, err := p.Read()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(m) != 1500 {
+		t.Errorf("got %d keys; want 1500", len(m))
 	}
 }
