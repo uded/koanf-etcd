@@ -283,6 +283,15 @@ func (p *Provider) WatchTyped(ctx context.Context, cb func([]Event, error)) erro
 
 // Event is a single change observed by WatchTyped. Resync events have
 // empty Key and Value; the entire current state was re-read.
+//
+// Key is the koanf path produced by the configured key transform.
+//
+// Value is the RAW bytes from etcd — the value transform configured via
+// WithValueTransform is NOT applied here. Read()/ReadBytes() apply the
+// transform; WatchTyped delivers raw bytes so consumers that want to
+// parse JSON/protobuf/etc. directly aren't forced through a TrimSpace+
+// string round-trip. If you want symmetric behavior with Read(), apply
+// the transform yourself: `v, _ := provider-supplied-transform(e.Key, e.Value)`.
 type Event struct {
 	Type     EventType
 	Key      string

@@ -1005,3 +1005,45 @@ func TestLog_RedactedByDefault(t *testing.T) {
 		t.Fatalf("secret value leaked into logs:\n%s", buf.String())
 	}
 }
+
+// TestWatch_RestartAfterCtxCancel verifies that cancelling the
+// WithWatchContext-supplied parent ctx lets the loop exit cleanly AND
+// resets the per-watch state so a subsequent Watch() succeeds without
+// going through Close(). Regression test for the bug where the cancelled
+// goroutine left watchCancel non-nil, forcing the Provider into a dead
+// state where every Watch returned "watch already active".
+func TestWatch_RestartAfterCtxCancel(t *testing.T) {
+	cli := embeddedEtcd(t)
+	cli.Put(context.Background(), "/svc/k", "v")
+
+	wctx, cancel := context.WithCancel(context.Background())
+	p, err := New(WithClient(cli), WithPrefix("/svc/"), WithWatchContext(wctx))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	if _, err := p.Read(); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	if err := p.Watch(func(_ any, _ error) {}); err != nil {
+		t.Fatalf("first watch: %v", err)
+	}
+
+	// Cancel parent ctx; watchLoop should exit AND clear watch state.
+	cancel()
+
+	// Give the goroutine a moment to drain through clearWatchState.
+	deadline := time.After(3 * time.Second)
+	for {
+		err := p.Watch(func(_ any, _ error) {})
+		if err == nil {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("second Watch never succeeded after ctx cancel: %v", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}

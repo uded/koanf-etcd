@@ -267,14 +267,15 @@ func (p *Provider) deliverResync(rev int64) {
 }
 
 // resync re-reads the full state after compaction, returning the new
-// revision. Updates p.stats.revision.
+// revision. Updates p.stats.revision. The watch ctx is threaded into
+// the read path so a Close() during a slow resync exits promptly.
 func (p *Provider) resync(ctx context.Context) (int64, error) {
 	if p.settings.blob {
-		if _, err := p.ReadBytes(); err != nil {
+		if _, err := p.readBytesCtx(ctx); err != nil {
 			return 0, err
 		}
 	} else {
-		if _, err := p.Read(); err != nil {
+		if _, err := p.readCtx(ctx); err != nil {
 			return 0, err
 		}
 	}

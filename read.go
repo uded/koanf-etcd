@@ -13,6 +13,19 @@ import (
 // (configurable). In blob mode it returns ErrUseParser (use ReadBytes
 // with a parser).
 func (p *Provider) Read() (map[string]any, error) {
+	return p.readCtx(context.Background())
+}
+
+// ReadBytes implements koanf.Provider for blob mode. In blob mode it
+// returns the raw value of the configured key. Outside blob mode it
+// returns ErrNotBlob — use Read() instead.
+func (p *Provider) ReadBytes() ([]byte, error) {
+	return p.readBytesCtx(context.Background())
+}
+
+// readCtx is the context-aware backend for Read. The watch loop's resync
+// path threads its own ctx so shutdown isn't blocked by a slow re-read.
+func (p *Provider) readCtx(parent context.Context) (map[string]any, error) {
 	if p.closed.Load() {
 		return nil, ErrClosed
 	}
@@ -20,22 +33,20 @@ func (p *Provider) Read() (map[string]any, error) {
 		return nil, ErrUseParser
 	}
 	if p.settings.key != "" {
-		return p.readSingle()
+		return p.readSingle(parent)
 	}
-	return p.readPrefix()
+	return p.readPrefix(parent)
 }
 
-// ReadBytes implements koanf.Provider for blob mode. In blob mode it
-// returns the raw value of the configured key. Outside blob mode it
-// returns ErrNotBlob — use Read() instead.
-func (p *Provider) ReadBytes() ([]byte, error) {
+// readBytesCtx is the context-aware backend for ReadBytes.
+func (p *Provider) readBytesCtx(parent context.Context) ([]byte, error) {
 	if p.closed.Load() {
 		return nil, ErrClosed
 	}
 	if !p.settings.blob {
 		return nil, ErrNotBlob
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), p.settings.readTimeout)
+	ctx, cancel := context.WithTimeout(parent, p.settings.readTimeout)
 	defer cancel()
 
 	resp, err := p.client.Get(ctx, p.settings.key, p.readOpts(false)...)
@@ -52,8 +63,8 @@ func (p *Provider) ReadBytes() ([]byte, error) {
 
 // readSingle reads exactly the configured key and returns a nested map
 // based on the koanf path produced by the key transform.
-func (p *Provider) readSingle() (map[string]any, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), p.settings.readTimeout)
+func (p *Provider) readSingle(parent context.Context) (map[string]any, error) {
+	ctx, cancel := context.WithTimeout(parent, p.settings.readTimeout)
 	defer cancel()
 
 	resp, err := p.client.Get(ctx, p.settings.key, p.readOpts(false)...)
@@ -85,7 +96,7 @@ func (p *Provider) readSingle() (map[string]any, error) {
 
 // readPrefix performs a (paginated) prefix read and returns either a flat
 // or nested map depending on settings.unflatten.
-func (p *Provider) readPrefix() (map[string]any, error) {
+func (p *Provider) readPrefix(parent context.Context) (map[string]any, error) {
 	flat := map[string]any{}
 	var lastRev int64
 	var lastKey string
@@ -93,7 +104,7 @@ func (p *Provider) readPrefix() (map[string]any, error) {
 	first := true
 
 	for more {
-		ctx, cancel := context.WithTimeout(context.Background(), p.settings.readTimeout)
+		ctx, cancel := context.WithTimeout(parent, p.settings.readTimeout)
 		var opts []clientv3.OpOption
 		var key string
 		if first {
