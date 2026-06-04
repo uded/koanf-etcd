@@ -10,6 +10,7 @@ import (
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.uber.org/goleak"
 )
 
 func TestErrors_AreDistinctSentinels(t *testing.T) {
@@ -871,4 +872,46 @@ func TestWatch_DebounceCoalesces(t *testing.T) {
 	if got > 3 {
 		t.Errorf("debounce failed: %d callbacks for a 20-put burst (want 1-3)", got)
 	}
+}
+
+func TestWatch_CtxCancelExitsCleanly(t *testing.T) {
+	// Register goleak FIRST so it runs LAST in the LIFO t.Cleanup chain,
+	// after embeddedEtcd has fully torn down its gRPC server goroutines.
+	t.Cleanup(func() {
+		// Small grace window for shutdown bookkeeping before goleak peeks.
+		time.Sleep(200 * time.Millisecond)
+		goleak.VerifyNone(t,
+			goleak.IgnoreTopFunction("google.golang.org/grpc.(*ccBalancerWrapper).watcher"),
+			goleak.IgnoreTopFunction("google.golang.org/grpc/internal/transport.(*controlBuffer).get"),
+			goleak.IgnoreTopFunction("google.golang.org/grpc/internal/transport.(*http2Client).keepalive"),
+			goleak.IgnoreTopFunction("go.etcd.io/etcd/client/v3.(*lessor).deadlineLoop"),
+		)
+	})
+
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 5*time.Second)
+	cli.Put(ctx, "/svc/k", "v")
+
+	wctx, cancel := context.WithCancel(context.Background())
+
+	p, _ := New(WithClient(cli), WithPrefix("/svc/"), WithWatchContext(wctx))
+	if _, err := p.Read(); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	if err := p.Watch(func(_ any, _ error) {}); err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+
+	// Let the loop establish itself before cancelling.
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	// Close releases the rest.
+	if err := p.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// Give the watch goroutine ~200ms to fully exit before goleak runs.
+	time.Sleep(200 * time.Millisecond)
 }
