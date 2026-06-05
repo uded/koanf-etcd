@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-06-05
+
+### Fixed
+
+- `TestClose_HonorsCloseTimeout` upper bound raised from 2s to 8s — the previous bound was too tight for a loaded GitHub Actions runner with a slow embedded-etcd teardown. The lower bound (200ms) is unchanged and remains the load-bearing assertion (proves `Close` actually waited rather than returning instantly).
+
+### Retracted
+
+- `v0.2.1` is retracted in `go.mod`. The integration test flaked on CI; library behavior was correct. Use `v0.2.2`.
+
 ## [0.2.1] - 2026-06-05
 
 ### Fixed

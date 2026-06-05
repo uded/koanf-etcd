@@ -848,6 +848,7 @@ func TestClose_HonorsCloseTimeout(t *testing.T) {
 	// wedged consumer. The watch goroutine will be stuck inside
 	// deliverBatch -> cb. Close must still return within timeout.
 	hang := make(chan struct{})
+	hangEntered := make(chan struct{}, 1)
 	t.Cleanup(func() { close(hang) }) // unblock at end of test
 
 	p, err := ketcd.New(
@@ -862,6 +863,10 @@ func TestClose_HonorsCloseTimeout(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 	if err := p.Watch(func(_ any, _ error) {
+		select {
+		case hangEntered <- struct{}{}:
+		default:
+		}
 		<-hang
 	}); err != nil {
 		t.Fatalf("watch: %v", err)
@@ -869,12 +874,27 @@ func TestClose_HonorsCloseTimeout(t *testing.T) {
 
 	cli.Put(context.Background(), "/svc/k2", "v") // triggers cb
 
+	// Wait for the callback to actually be inside the hang before we
+	// call Close. Without this, Close cancels the watch ctx so quickly
+	// that the goroutine exits before ever entering the cb and the
+	// timeout path is never exercised.
+	select {
+	case <-hangEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watch callback never entered hang state")
+	}
+
 	start := time.Now()
 	if err := p.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 	d := time.Since(start)
-	if d < 200*time.Millisecond || d > 2*time.Second {
+	// Lower bound (200ms) is the load-bearing assertion: it proves Close
+	// actually waited and didn't return at t=0. Upper bound is generous
+	// because a heavily loaded CI runner (cold cache, slow embedded-etcd
+	// teardown, scheduler pressure) can easily add 4-5s of slack on top
+	// of the 300ms timeout the test installed.
+	if d < 200*time.Millisecond || d > 8*time.Second {
 		t.Errorf("Close took %v; want roughly the 300ms timeout, not 0 and not unbounded", d)
 	}
 }

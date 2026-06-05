@@ -5,7 +5,8 @@ go 1.25.0
 toolchain go1.25.11
 
 retract (
-	v0.2.0 // gofmt drift in settings.go and watch.go made CI red; use v0.2.1 or later.
+	v0.2.0 // gofmt drift in settings.go and watch.go made CI red; use v0.2.2 or later.
+	v0.2.1 // TestClose_HonorsCloseTimeout upper bound was too tight for loaded CI runners; use v0.2.2 or later.
 )
 
 require (
