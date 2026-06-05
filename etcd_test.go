@@ -13,6 +13,7 @@ import (
 )
 
 func TestErrors_AreDistinctSentinels(t *testing.T) {
+	t.Parallel()
 	cases := []error{
 		ErrUseParser,
 		ErrEmptyPrefix,
@@ -36,6 +37,7 @@ func TestErrors_AreDistinctSentinels(t *testing.T) {
 }
 
 func TestSettings_Defaults(t *testing.T) {
+	t.Parallel()
 	s := newSettings()
 	if s.delim != "." {
 		t.Errorf("default delim = %q, want %q", s.delim, ".")
@@ -67,6 +69,7 @@ func TestSettings_Defaults(t *testing.T) {
 }
 
 func TestBuildClient_DefaultsAutoSyncTo30s(t *testing.T) {
+	t.Parallel()
 	// autoSync's default is applied inside buildClient, not in newSettings,
 	// so the value-equality check in hasNonDefaultClientConfig keeps
 	// working. Verify the build-time default is what we expect.
@@ -79,6 +82,7 @@ func TestBuildClient_DefaultsAutoSyncTo30s(t *testing.T) {
 }
 
 func TestSplitCleanPath_StripsLeadingAndTrailingEmpties(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in    string
 		delim string
@@ -107,6 +111,7 @@ func TestSplitCleanPath_StripsLeadingAndTrailingEmpties(t *testing.T) {
 }
 
 func TestOptions_ConnectionApplied(t *testing.T) {
+	t.Parallel()
 	s := newSettings()
 	opts := []Option{
 		WithEndpoints("a:2379", "b:2379"),
@@ -142,6 +147,7 @@ func TestOptions_ConnectionApplied(t *testing.T) {
 }
 
 func TestOptions_SRVEndpoints(t *testing.T) {
+	t.Parallel()
 	s := newSettings()
 	if err := WithEndpointsFromSRV("etcd-client", "tcp", "example.com")(s); err != nil {
 		t.Fatalf("apply: %v", err)
@@ -152,6 +158,7 @@ func TestOptions_SRVEndpoints(t *testing.T) {
 }
 
 func TestOptions_ReadShaping(t *testing.T) {
+	t.Parallel()
 	s := newSettings()
 	keyXf := func(k string) string { return k }
 	valXf := func(k string, raw []byte) (any, error) { return string(raw), nil }
@@ -202,6 +209,7 @@ func TestOptions_ReadShaping(t *testing.T) {
 }
 
 func TestOptions_BlobAndStrict(t *testing.T) {
+	t.Parallel()
 	s := newSettings()
 	called := false
 	onEmpty := func(prefix string) { called = true }
@@ -235,6 +243,7 @@ func TestOptions_BlobAndStrict(t *testing.T) {
 }
 
 func TestOptions_Watch(t *testing.T) {
+	t.Parallel()
 	s := newSettings()
 	for _, opt := range []Option{
 		WithWatchContext(context.Background()),
@@ -278,6 +287,7 @@ func TestOptions_Watch(t *testing.T) {
 }
 
 func TestNew_RejectsNoMode(t *testing.T) {
+	t.Parallel()
 	_, err := New(WithEndpoints("x:2379"))
 	if !errors.Is(err, ErrNoMode) {
 		t.Fatalf("want ErrNoMode, got %v", err)
@@ -285,6 +295,7 @@ func TestNew_RejectsNoMode(t *testing.T) {
 }
 
 func TestNew_RejectsBothModes(t *testing.T) {
+	t.Parallel()
 	_, err := New(WithEndpoints("x:2379"), WithKey("/a"), WithPrefix("/b/"))
 	if !errors.Is(err, ErrOptionConflict) {
 		t.Fatalf("want ErrOptionConflict, got %v", err)
@@ -292,6 +303,7 @@ func TestNew_RejectsBothModes(t *testing.T) {
 }
 
 func TestNew_RejectsBlobWithoutKey(t *testing.T) {
+	t.Parallel()
 	_, err := New(WithEndpoints("x:2379"), WithPrefix("/a/"), WithBlob())
 	if !errors.Is(err, ErrOptionConflict) {
 		t.Fatalf("want ErrOptionConflict, got %v", err)
@@ -299,6 +311,7 @@ func TestNew_RejectsBlobWithoutKey(t *testing.T) {
 }
 
 func TestNew_RejectsBlobWithUnflatten(t *testing.T) {
+	t.Parallel()
 	_, err := New(WithEndpoints("x:2379"), WithKey("/a"), WithBlob(), WithUnflatten(true))
 	if !errors.Is(err, ErrOptionConflict) {
 		t.Fatalf("want ErrOptionConflict, got %v", err)
@@ -306,6 +319,7 @@ func TestNew_RejectsBlobWithUnflatten(t *testing.T) {
 }
 
 func TestTransform_DefaultKey_StripsPrefixAndReplacesSlash(t *testing.T) {
+	t.Parallel()
 	s := newSettings()
 	s.prefix = "/svc/"
 	s.delim = "."
@@ -325,6 +339,7 @@ func TestTransform_DefaultKey_StripsPrefixAndReplacesSlash(t *testing.T) {
 }
 
 func TestTransform_DefaultKey_TrimPrefixOff(t *testing.T) {
+	t.Parallel()
 	s := newSettings()
 	s.prefix = "/svc/"
 	s.delim = "."
@@ -337,6 +352,7 @@ func TestTransform_DefaultKey_TrimPrefixOff(t *testing.T) {
 }
 
 func TestTransform_DefaultKey_CustomDelim(t *testing.T) {
+	t.Parallel()
 	s := newSettings()
 	s.prefix = "/svc/"
 	s.delim = "/"
@@ -349,6 +365,7 @@ func TestTransform_DefaultKey_CustomDelim(t *testing.T) {
 }
 
 func TestTransform_DefaultValue_TrimsWhitespace(t *testing.T) {
+	t.Parallel()
 	v, err := defaultValueTransform("any", []byte("  http://x\n\t"))
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -359,6 +376,7 @@ func TestTransform_DefaultValue_TrimsWhitespace(t *testing.T) {
 }
 
 func TestUnflattenMap_NoCollision(t *testing.T) {
+	t.Parallel()
 	// Sanity: non-colliding paths still produce a nested map without error.
 	flat := map[string]any{"a.b": "1", "a.c": "2", "d": "3"}
 	got, err := unflattenMap(flat, ".")
@@ -375,6 +393,7 @@ func TestUnflattenMap_NoCollision(t *testing.T) {
 }
 
 func TestBackoff_HonorsMinFloor(t *testing.T) {
+	t.Parallel()
 	min := 100 * time.Millisecond
 	max := 5 * time.Second
 	for attempt := 1; attempt <= 8; attempt++ {
@@ -391,6 +410,7 @@ func TestBackoff_HonorsMinFloor(t *testing.T) {
 }
 
 func TestBackoff_HandlesOverflow(t *testing.T) {
+	t.Parallel()
 	// Very large attempts must clamp to max, not wrap.
 	d := backoff(64, time.Second, 30*time.Second)
 	if d < time.Second || d > 30*time.Second {
@@ -403,6 +423,7 @@ func TestBackoff_HandlesOverflow(t *testing.T) {
 }
 
 func TestBackoff_MinEqualsMax(t *testing.T) {
+	t.Parallel()
 	d := backoff(1, 2*time.Second, 2*time.Second)
 	if d != 2*time.Second {
 		t.Errorf("min==max: backoff=%v want 2s", d)
@@ -410,6 +431,7 @@ func TestBackoff_MinEqualsMax(t *testing.T) {
 }
 
 func TestArmDebounce_FirstCallCreates(t *testing.T) {
+	t.Parallel()
 	timer, ch := armDebounce(nil, 50*time.Millisecond)
 	if timer == nil {
 		t.Fatal("expected non-nil timer on first call")
@@ -427,6 +449,7 @@ func TestArmDebounce_FirstCallCreates(t *testing.T) {
 }
 
 func TestArmDebounce_ResetOnExpired(t *testing.T) {
+	t.Parallel()
 	// First call creates and lets fire so the channel is drained.
 	timer, ch := armDebounce(nil, 20*time.Millisecond)
 	<-ch
@@ -442,6 +465,7 @@ func TestArmDebounce_ResetOnExpired(t *testing.T) {
 }
 
 func TestArmDebounce_ResetOnLive(t *testing.T) {
+	t.Parallel()
 	// First call creates a long timer that won't fire on its own.
 	timer, _ := armDebounce(nil, 5*time.Second)
 	// Reset to a short window — the long timer should be stopped and
@@ -461,6 +485,7 @@ func TestArmDebounce_ResetOnLive(t *testing.T) {
 // avoids pulling the TLS-fixture generator (and its embedded etcd
 // neighbour) into the main module's test dep graph.
 func TestLoadTLSFromFiles_HardensConfig(t *testing.T) {
+	t.Parallel()
 	cfg, err := loadTLSFromFiles("", "", "")
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -471,6 +496,7 @@ func TestLoadTLSFromFiles_HardensConfig(t *testing.T) {
 }
 
 func TestOptions_WithTLSServerName(t *testing.T) {
+	t.Parallel()
 	s := newSettings()
 	if err := WithTLSServerName("etcd.example.com")(s); err != nil {
 		t.Fatalf("apply: %v", err)
@@ -489,6 +515,7 @@ func TestOptions_WithTLSServerName(t *testing.T) {
 // because 5s matched the default. The wasSet flag flips on regardless
 // of value, so the conflict must be detected.
 func TestNew_BYOPlusDefaultEqualValueStillConflicts(t *testing.T) {
+	t.Parallel()
 	cli := newFakeClient()
 	_, err := New(WithClient(cli), WithKey("/x"), WithDialTimeout(5*time.Second))
 	if !errors.Is(err, ErrOptionConflict) {
@@ -510,6 +537,7 @@ func newFakeClient() *clientv3.Client {
 // ever fired. Guards against a future field landing without snapshot()
 // wiring.
 func TestStats_NewFieldsSnapshotZeroByDefault(t *testing.T) {
+	t.Parallel()
 	a := &atomicStats{}
 	s := a.snapshot()
 	if s.TotalWatchErrors != 0 || s.TotalEventsDelivered != 0 || s.TotalReads != 0 ||
@@ -522,6 +550,7 @@ func TestStats_NewFieldsSnapshotZeroByDefault(t *testing.T) {
 // TestStats_NewFieldsRoundTrip verifies that every new atomic counter
 // surfaces through snapshot() with the value it was loaded with.
 func TestStats_NewFieldsRoundTrip(t *testing.T) {
+	t.Parallel()
 	a := &atomicStats{}
 	a.totalWatchErrors.Add(5)
 	a.totalEventsDelivered.Add(7)
@@ -541,6 +570,7 @@ func TestStats_NewFieldsRoundTrip(t *testing.T) {
 // errors land in the WatchErrorAuth bucket — important because the
 // watch loop does NOT retry on auth failures.
 func TestClassifyWatchError_AuthIsAuth(t *testing.T) {
+	t.Parallel()
 	got := classifyWatchError(rpctypes.ErrPermissionDenied)
 	if got != WatchErrorAuth {
 		t.Errorf("PermissionDenied class = %v; want WatchErrorAuth", got)
@@ -551,6 +581,7 @@ func TestClassifyWatchError_AuthIsAuth(t *testing.T) {
 // compaction signal is its own class so callers can distinguish a
 // resync-recoverable error from a hard auth failure.
 func TestClassifyWatchError_CompactionIsCompaction(t *testing.T) {
+	t.Parallel()
 	got := classifyWatchError(rpctypes.ErrCompacted)
 	if got != WatchErrorCompaction {
 		t.Errorf("ErrCompacted class = %v; want WatchErrorCompaction", got)
@@ -561,8 +592,61 @@ func TestClassifyWatchError_CompactionIsCompaction(t *testing.T) {
 // recognized by isFatalRPCError or compaction-detection lands in the
 // transient bucket — the watch loop will reconnect with backoff.
 func TestClassifyWatchError_OtherIsTransient(t *testing.T) {
+	t.Parallel()
 	got := classifyWatchError(fmt.Errorf("network glitch"))
 	if got != WatchErrorTransient {
 		t.Errorf("generic err class = %v; want WatchErrorTransient", got)
+	}
+}
+
+func TestSplitCleanPath_MultiByteDelim(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in    string
+		delim string
+		want  []string
+	}{
+		{"app::db::host", "::", []string{"app", "db", "host"}},
+		{"::app::db", "::", []string{"app", "db"}},
+		{"app::db::", "::", []string{"app", "db"}},
+		{"::app::db::", "::", []string{"app", "db"}},
+		{"app:db", "::", []string{"app:db"}}, // single colon shouldn't split on "::"
+		{"", "::", nil},
+		{"::", "::", nil},
+		{"::::", "::", nil},
+	}
+	for _, c := range cases {
+		got := splitCleanPath(c.in, c.delim)
+		if len(got) != len(c.want) {
+			t.Errorf("splitCleanPath(%q, %q) = %v; want %v", c.in, c.delim, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("splitCleanPath(%q, %q)[%d] = %q; want %q", c.in, c.delim, i, got[i], c.want[i])
+			}
+		}
+	}
+}
+
+func TestPrefixEnd_OverflowCarry(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", "\x00"},
+		{"a", "b"},
+		{"ab", "ac"},
+		{"a\xff", "b"},       // carries: trailing 0xff drops, last byte +1
+		{"\xff\xff", "\x00"}, // all 0xff: convention is "no upper bound"
+		{"a\xff\xff", "b"},
+		{string([]byte{0x00}), "\x01"},
+	}
+	for _, c := range cases {
+		got := prefixEnd(c.in)
+		if got != c.want {
+			t.Errorf("prefixEnd(%q) = %q; want %q", c.in, got, c.want)
+		}
 	}
 }

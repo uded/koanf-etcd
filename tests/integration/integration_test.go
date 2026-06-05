@@ -648,8 +648,26 @@ func TestStats_PutDeleteCounts(t *testing.T) {
 		// fall through and inspect stats anyway
 	}
 
-	time.Sleep(100 * time.Millisecond)
-	s := p.Stats()
+	// Poll until stats reflect the seeded events instead of sleeping a
+	// fixed window. Stats counters are updated asynchronously from the
+	// watch goroutine, so a tight assertion right after the cb wakeup
+	// can race ahead of the atomic increments.
+	statsDeadline := time.After(5 * time.Second)
+	var s ketcd.Stats
+	for {
+		s = p.Stats()
+		if s.TotalPuts >= 2 && s.TotalDeletes >= 1 {
+			break
+		}
+		select {
+		case <-statsDeadline:
+			// Fall through to assertions below — they'll produce a precise
+			// diagnostic with the actual counters observed.
+			goto check
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+check:
 	if s.TotalPuts < 2 {
 		t.Errorf("TotalPuts = %d; want >= 2", s.TotalPuts)
 	}
