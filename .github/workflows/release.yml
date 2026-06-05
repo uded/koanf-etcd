@@ -29,16 +29,27 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
-      - name: 🔎 go vet
+      - name: 🔎 go vet (main module)
         run: go vet ./...
-      - name: 🧪 go test -race
+      - name: 🔎 go vet (integration)
+        working-directory: tests/integration
+        run: go vet ./...
+      - name: 🧪 go test (main module)
         run: go test -race -count=1 -timeout 300s ./...
-      - name: 🛡️ govulncheck
+      - name: 🧪 go test (integration)
+        working-directory: tests/integration
+        run: go test -race -count=1 -timeout 300s ./...
+      - name: 🛡️ govulncheck (main module)
         env:
           GOTOOLCHAIN: auto
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
+      - name: 🛡️ govulncheck (integration)
+        env:
+          GOTOOLCHAIN: auto
+        working-directory: tests/integration
+        run: govulncheck ./...
 
   publish:
     name: 🚀 Publish release

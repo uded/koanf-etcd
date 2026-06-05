@@ -1,58 +1,18 @@
-package etcdwrite_test
+package integration_test
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
-	"net/url"
-	"os"
 	"testing"
-	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
-	"go.etcd.io/etcd/server/v3/embed"
 
 	etcdwrite "github.com/uded/koanf-etcd/write"
 )
 
-func newEmbedded(t *testing.T) *clientv3.Client {
-	t.Helper()
-	dir, _ := os.MkdirTemp("", "kwrite-*")
-	cfg := embed.NewConfig()
-	cfg.Dir = dir
-	cfg.LogLevel = "error"
-	cfg.ListenClientUrls = []url.URL{{Scheme: "http", Host: freeAddr(t)}}
-	cfg.AdvertiseClientUrls = cfg.ListenClientUrls
-	cfg.ListenPeerUrls = []url.URL{{Scheme: "http", Host: freeAddr(t)}}
-	cfg.AdvertisePeerUrls = cfg.ListenPeerUrls
-	cfg.InitialCluster = fmt.Sprintf("default=%s", cfg.ListenPeerUrls[0].String())
-	e, err := embed.StartEtcd(cfg)
-	if err != nil {
-		t.Fatalf("start: %v", err)
-	}
-	<-e.Server.ReadyNotify()
-	cli, err := clientv3.New(clientv3.Config{Endpoints: []string{cfg.ListenClientUrls[0].Host}, DialTimeout: 5 * time.Second})
-	if err != nil {
-		t.Fatalf("client: %v", err)
-	}
-	t.Cleanup(func() {
-		cli.Close()
-		e.Close()
-		os.RemoveAll(dir)
-	})
-	return cli
-}
-
-func freeAddr(t *testing.T) string {
-	t.Helper()
-	l, _ := net.Listen("tcp", "127.0.0.1:0")
-	defer l.Close()
-	return l.Addr().String()
-}
-
 func TestPut_And_Get(t *testing.T) {
-	cli := newEmbedded(t)
+	cli := embeddedEtcd(t)
 	ctx := context.Background()
 	if err := etcdwrite.Put(ctx, cli, "/k", "v"); err != nil {
 		t.Fatalf("put: %v", err)
@@ -64,7 +24,7 @@ func TestPut_And_Get(t *testing.T) {
 }
 
 func TestDeletePrefix(t *testing.T) {
-	cli := newEmbedded(t)
+	cli := embeddedEtcd(t)
 	ctx := context.Background()
 	for i := 0; i < 5; i++ {
 		etcdwrite.Put(ctx, cli, fmt.Sprintf("/p/%d", i), "x")
@@ -79,7 +39,7 @@ func TestDeletePrefix(t *testing.T) {
 }
 
 func TestDeletePrefix_RejectsEmpty(t *testing.T) {
-	cli := newEmbedded(t)
+	cli := embeddedEtcd(t)
 	if err := etcdwrite.DeletePrefix(context.Background(), cli, ""); !errors.Is(err, etcdwrite.ErrUnsafePrefix) {
 		t.Fatalf("want ErrUnsafePrefix for empty prefix, got %v", err)
 	}
@@ -89,7 +49,7 @@ func TestDeletePrefix_RejectsEmpty(t *testing.T) {
 }
 
 func TestDeletePrefix_AllowEmptyOptIn(t *testing.T) {
-	cli := newEmbedded(t)
+	cli := embeddedEtcd(t)
 	ctx := context.Background()
 	etcdwrite.Put(ctx, cli, "/seed/a", "1")
 	if err := etcdwrite.DeletePrefix(ctx, cli, "", etcdwrite.AllowEmptyPrefix()); err != nil {
@@ -102,14 +62,14 @@ func TestDeletePrefix_AllowEmptyOptIn(t *testing.T) {
 }
 
 func TestDelete_RejectsEmpty(t *testing.T) {
-	cli := newEmbedded(t)
+	cli := embeddedEtcd(t)
 	if err := etcdwrite.Delete(context.Background(), cli, ""); !errors.Is(err, etcdwrite.ErrUnsafePrefix) {
 		t.Fatalf("want ErrUnsafePrefix for empty key, got %v", err)
 	}
 }
 
 func TestPutAll_Atomic(t *testing.T) {
-	cli := newEmbedded(t)
+	cli := embeddedEtcd(t)
 	ctx := context.Background()
 	kvs := map[string]string{"/atomic/a": "1", "/atomic/b": "2", "/atomic/c": "3"}
 	if err := etcdwrite.PutAll(ctx, cli, kvs); err != nil {

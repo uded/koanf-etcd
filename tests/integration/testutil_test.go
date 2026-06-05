@@ -1,19 +1,11 @@
-package etcd
+package integration_test
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"fmt"
-	"math/big"
 	"net"
 	"net/url"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -110,107 +102,6 @@ func pickAddr(t testing.TB) string {
 	}
 	defer l.Close()
 	return l.Addr().String()
-}
-
-// tlsFixture bundles paths to a self-signed CA plus server and client
-// cert/key pairs generated on the fly. All files live in a temp dir
-// cleaned up by t.Cleanup.
-type tlsFixture struct {
-	dir     string
-	caFile  string
-	srvCert string
-	srvKey  string
-	cliCert string
-	cliKey  string
-}
-
-// genTLSFixtures generates a self-signed CA, server cert/key, and client
-// cert/key, writing them to a temp dir. Returns the paths.
-func genTLSFixtures(t testing.TB) tlsFixture {
-	t.Helper()
-	dir, err := os.MkdirTemp("", "koanf-etcd-tls-*")
-	if err != nil {
-		t.Fatalf("mkdir tls: %v", err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("generate ca key: %v", err)
-	}
-	caTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "test-ca"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-	}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatalf("create ca cert: %v", err)
-	}
-	caFile := filepath.Join(dir, "ca.pem")
-	writePEM(t, caFile, "CERTIFICATE", caDER)
-
-	makeLeaf := func(cn string, isServer bool) (string, string) {
-		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			t.Fatalf("generate %s key: %v", cn, err)
-		}
-		tmpl := &x509.Certificate{
-			SerialNumber: big.NewInt(time.Now().UnixNano()),
-			Subject:      pkix.Name{CommonName: cn},
-			NotBefore:    time.Now().Add(-time.Hour),
-			NotAfter:     time.Now().Add(24 * time.Hour),
-			KeyUsage:     x509.KeyUsageDigitalSignature,
-		}
-		if isServer {
-			tmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
-			tmpl.DNSNames = []string{"localhost"}
-			tmpl.IPAddresses = []net.IP{net.ParseIP("127.0.0.1")}
-		} else {
-			tmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
-		}
-		der, err := x509.CreateCertificate(rand.Reader, tmpl, caTmpl, &key.PublicKey, caKey)
-		if err != nil {
-			t.Fatalf("create %s cert: %v", cn, err)
-		}
-		certFile := filepath.Join(dir, cn+".pem")
-		keyFile := filepath.Join(dir, cn+".key")
-		writePEM(t, certFile, "CERTIFICATE", der)
-		keyDER, err := x509.MarshalECPrivateKey(key)
-		if err != nil {
-			t.Fatalf("marshal %s key: %v", cn, err)
-		}
-		writePEM(t, keyFile, "EC PRIVATE KEY", keyDER)
-		return certFile, keyFile
-	}
-
-	srvCert, srvKey := makeLeaf("server", true)
-	cliCert, cliKey := makeLeaf("client", false)
-
-	return tlsFixture{
-		dir:     dir,
-		caFile:  caFile,
-		srvCert: srvCert,
-		srvKey:  srvKey,
-		cliCert: cliCert,
-		cliKey:  cliKey,
-	}
-}
-
-func writePEM(t testing.TB, path, typ string, der []byte) {
-	t.Helper()
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatalf("create %s: %v", path, err)
-	}
-	defer f.Close()
-	if err := pem.Encode(f, &pem.Block{Type: typ, Bytes: der}); err != nil {
-		t.Fatalf("encode pem %s: %v", path, err)
-	}
 }
 
 // ctxWithTimeout returns a context with the given timeout and registers
