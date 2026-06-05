@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
@@ -14,6 +16,8 @@ func TestErrors_AreDistinctSentinels(t *testing.T) {
 	cases := []error{
 		ErrUseParser,
 		ErrEmptyPrefix,
+		ErrKeyNotFound,
+		ErrWatchActive,
 		ErrNotBlob,
 		ErrOptionConflict,
 		ErrNoMode,
@@ -240,9 +244,9 @@ func TestOptions_Watch(t *testing.T) {
 		WithProgressNotify(true),
 		WithEventFilter(true, false), // deliver only puts
 		WithCreatedNotify(true),
-		WithOnReconnect(func(int, error) {}),
+		WithOnReconnect(func(int, error, int64) {}),
 		WithOnResync(func(string, int64) {}),
-		WithOnWatchError(func(error) {}),
+		WithOnWatchError(func(error, WatchErrorClass) {}),
 	} {
 		if err := opt(s); err != nil {
 			t.Fatalf("apply: %v", err)
@@ -499,4 +503,66 @@ func TestNew_BYOPlusDefaultEqualValueStillConflicts(t *testing.T) {
 // any RPC could happen.
 func newFakeClient() *clientv3.Client {
 	return &clientv3.Client{}
+}
+
+// TestStats_NewFieldsSnapshotZeroByDefault verifies that the extended
+// Stats fields all default to their zero value when no counter has
+// ever fired. Guards against a future field landing without snapshot()
+// wiring.
+func TestStats_NewFieldsSnapshotZeroByDefault(t *testing.T) {
+	a := &atomicStats{}
+	s := a.snapshot()
+	if s.TotalWatchErrors != 0 || s.TotalEventsDelivered != 0 || s.TotalReads != 0 ||
+		s.TotalDebounceFlushes != 0 || s.LastFlushCoalescedCount != 0 ||
+		!s.LastWatchErrorAt.IsZero() {
+		t.Errorf("zero-value snapshot leaks non-zero stats: %+v", s)
+	}
+}
+
+// TestStats_NewFieldsRoundTrip verifies that every new atomic counter
+// surfaces through snapshot() with the value it was loaded with.
+func TestStats_NewFieldsRoundTrip(t *testing.T) {
+	a := &atomicStats{}
+	a.totalWatchErrors.Add(5)
+	a.totalEventsDelivered.Add(7)
+	a.totalReads.Add(11)
+	a.totalDebounceFlushes.Add(13)
+	a.lastFlushCoalesced.Store(17)
+	a.lastWatchErrorUnix.Store(time.Now().UnixNano())
+	s := a.snapshot()
+	if s.TotalWatchErrors != 5 || s.TotalEventsDelivered != 7 || s.TotalReads != 11 ||
+		s.TotalDebounceFlushes != 13 || s.LastFlushCoalescedCount != 17 ||
+		s.LastWatchErrorAt.IsZero() {
+		t.Errorf("snapshot mismatch: %+v", s)
+	}
+}
+
+// TestClassifyWatchError_AuthIsAuth verifies that etcd permission
+// errors land in the WatchErrorAuth bucket — important because the
+// watch loop does NOT retry on auth failures.
+func TestClassifyWatchError_AuthIsAuth(t *testing.T) {
+	got := classifyWatchError(rpctypes.ErrPermissionDenied)
+	if got != WatchErrorAuth {
+		t.Errorf("PermissionDenied class = %v; want WatchErrorAuth", got)
+	}
+}
+
+// TestClassifyWatchError_CompactionIsCompaction verifies the
+// compaction signal is its own class so callers can distinguish a
+// resync-recoverable error from a hard auth failure.
+func TestClassifyWatchError_CompactionIsCompaction(t *testing.T) {
+	got := classifyWatchError(rpctypes.ErrCompacted)
+	if got != WatchErrorCompaction {
+		t.Errorf("ErrCompacted class = %v; want WatchErrorCompaction", got)
+	}
+}
+
+// TestClassifyWatchError_OtherIsTransient verifies that any error not
+// recognized by isFatalRPCError or compaction-detection lands in the
+// transient bucket — the watch loop will reconnect with backoff.
+func TestClassifyWatchError_OtherIsTransient(t *testing.T) {
+	got := classifyWatchError(fmt.Errorf("network glitch"))
+	if got != WatchErrorTransient {
+		t.Errorf("generic err class = %v; want WatchErrorTransient", got)
+	}
 }

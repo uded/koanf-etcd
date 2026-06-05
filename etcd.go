@@ -279,7 +279,7 @@ func (p *Provider) Watch(cb func(event any, err error)) error {
 		return ErrClosed
 	}
 	if p.watchCancel != nil {
-		return fmt.Errorf("koanf-etcd: watch already active")
+		return ErrWatchActive
 	}
 	parent := p.settings.watchCtx
 	if parent == nil {
@@ -302,7 +302,7 @@ func (p *Provider) WatchTyped(ctx context.Context, cb func([]Event, error)) erro
 		return ErrClosed
 	}
 	if p.watchCancel != nil {
-		return fmt.Errorf("koanf-etcd: watch already active")
+		return ErrWatchActive
 	}
 	loopCtx, cancel := context.WithCancel(ctx)
 	p.watchCancel = cancel

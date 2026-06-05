@@ -35,7 +35,10 @@ What it intentionally **is not**:
   events fire as callbacks: `OnReconnect`, `OnResync`, `OnWatchError`,
   `OnEmpty`. Consumers route events into whatever logging stack they're already
   using — slog, zerolog, zap, or none. A configuration-loader library has no
-  business imposing a logger choice on its host process.
+  business imposing a logger choice on its host process. `OnWatchError` carries
+  a `WatchErrorClass` (`Transient` / `Compaction` / `Auth` / `Fatal`) so
+  callers can route by error class without string-matching the underlying
+  error.
 
 ## Module structure
 

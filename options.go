@@ -304,9 +304,12 @@ func WithCreatedNotify(on bool) Option {
 	return func(s *settings) error { s.createdNotify = on; return nil }
 }
 
-// WithOnReconnect fires after each successful watch reconnect. attempt is
-// the 1-indexed retry count since the last successful connect.
-func WithOnReconnect(fn func(attempt int, lastErr error)) Option {
+// WithOnReconnect fires after each reconnect attempt is scheduled.
+//   - attempt: 1-indexed retry count since the last successful connect.
+//   - lastErr: the error that caused the reconnect.
+//   - lastRevision: the revision the next watch will resume from.
+//     Useful to correlate reconnects with potential data-gap windows.
+func WithOnReconnect(fn func(attempt int, lastErr error, lastRevision int64)) Option {
 	return func(s *settings) error { s.onReconnect = fn; return nil }
 }
 
@@ -316,9 +319,11 @@ func WithOnResync(fn func(reason string, newRevision int64)) Option {
 	return func(s *settings) error { s.onResync = fn; return nil }
 }
 
-// WithOnWatchError fires on each non-recoverable watch error before the
-// watcher retries.
-func WithOnWatchError(fn func(err error)) Option {
+// WithOnWatchError fires when the watch loop observes a non-recoverable
+// or noteworthy error. The class argument tells the caller what kind of
+// error without parsing the message — see WatchErrorClass for the
+// classification surface.
+func WithOnWatchError(fn func(err error, class WatchErrorClass)) Option {
 	return func(s *settings) error { s.onWatchError = fn; return nil }
 }
 

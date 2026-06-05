@@ -74,8 +74,8 @@ func ExampleProvider_Watch() {
 		ketcd.WithClient(cli),
 		ketcd.WithPrefix("/svc/"),
 		ketcd.WithDebounce(500*time.Millisecond),
-		ketcd.WithOnWatchError(func(err error) {
-			logger.Error("etcd watch error", "err", err)
+		ketcd.WithOnWatchError(func(err error, class ketcd.WatchErrorClass) {
+			logger.Error("etcd watch error", "err", err, "class", class)
 		}),
 	)
 	defer p.Close()

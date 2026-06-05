@@ -75,9 +75,9 @@ type settings struct {
 	wantDelete         bool
 	filterSet          bool // true once WithEventFilter explicitly applied
 	createdNotify      bool
-	onReconnect        func(attempt int, lastErr error)
+	onReconnect        func(attempt int, lastErr error, lastRevision int64)
 	onResync           func(reason string, newRevision int64)
-	onWatchError       func(err error)
+	onWatchError       func(err error, class WatchErrorClass)
 
 	// lifecycle
 	closeTimeout time.Duration // 0 = no timeout; default 5s
@@ -137,39 +137,81 @@ type Stats struct {
 	// LastReconnectAt is the wall-clock time of the most recent
 	// reconnect attempt. Zero if no reconnect has occurred.
 	LastReconnectAt time.Time
+
+	// TotalWatchErrors is the cumulative count of non-recoverable
+	// errors the watch loop has observed (compaction does NOT count;
+	// it's counted under TotalResyncs).
+	TotalWatchErrors uint64
+
+	// TotalEventsDelivered is the cumulative count of individual Event
+	// objects delivered to callbacks. Roughly TotalPuts + TotalDeletes
+	// + TotalResyncs, but tracked independently for cheaper assertions.
+	TotalEventsDelivered uint64
+
+	// TotalReads is the cumulative count of Read() and ReadBytes()
+	// invocations that returned without error.
+	TotalReads uint64
+
+	// LastWatchErrorAt is the wall-clock time of the most recent watch
+	// error (recoverable or not). Zero if no watch error has occurred.
+	LastWatchErrorAt time.Time
+
+	// TotalDebounceFlushes is the cumulative count of debounce window
+	// flushes that delivered at least one event.
+	TotalDebounceFlushes uint64
+
+	// LastFlushCoalescedCount is the event count of the most recent
+	// debounce flush. A useful "are we coalescing usefully?" signal.
+	LastFlushCoalescedCount int
 }
 
 // atomicStats holds the live counters. Snapshotted to Stats via
 // snapshot().
 type atomicStats struct {
-	revision        atomic.Int64
-	totalPuts       atomic.Uint64
-	totalDeletes    atomic.Uint64
-	totalResyncs    atomic.Uint64
-	totalReconnects atomic.Uint64
-	lastBatch       atomic.Int32
-	lastResyncUnix  atomic.Int64
-	lastReconnUnix  atomic.Int64
+	revision             atomic.Int64
+	totalPuts            atomic.Uint64
+	totalDeletes         atomic.Uint64
+	totalResyncs         atomic.Uint64
+	totalReconnects      atomic.Uint64
+	lastBatch            atomic.Int32
+	lastResyncUnix       atomic.Int64
+	lastReconnUnix       atomic.Int64
+	totalWatchErrors     atomic.Uint64
+	totalEventsDelivered atomic.Uint64
+	totalReads           atomic.Uint64
+	lastWatchErrorUnix   atomic.Int64
+	totalDebounceFlushes atomic.Uint64
+	lastFlushCoalesced   atomic.Int32
 }
 
 func (a *atomicStats) snapshot() Stats {
 	rs := a.lastResyncUnix.Load()
 	rc := a.lastReconnUnix.Load()
-	var lr, lrc time.Time
+	we := a.lastWatchErrorUnix.Load()
+	var lr, lrc, lwe time.Time
 	if rs != 0 {
 		lr = time.Unix(0, rs)
 	}
 	if rc != 0 {
 		lrc = time.Unix(0, rc)
 	}
+	if we != 0 {
+		lwe = time.Unix(0, we)
+	}
 	return Stats{
-		Revision:        a.revision.Load(),
-		TotalPuts:       a.totalPuts.Load(),
-		TotalDeletes:    a.totalDeletes.Load(),
-		TotalResyncs:    a.totalResyncs.Load(),
-		TotalReconnects: a.totalReconnects.Load(),
-		LastEventBatch:  int(a.lastBatch.Load()),
-		LastResyncAt:    lr,
-		LastReconnectAt: lrc,
+		Revision:                a.revision.Load(),
+		TotalPuts:               a.totalPuts.Load(),
+		TotalDeletes:            a.totalDeletes.Load(),
+		TotalResyncs:            a.totalResyncs.Load(),
+		TotalReconnects:         a.totalReconnects.Load(),
+		LastEventBatch:          int(a.lastBatch.Load()),
+		LastResyncAt:            lr,
+		LastReconnectAt:         lrc,
+		TotalWatchErrors:        a.totalWatchErrors.Load(),
+		TotalEventsDelivered:    a.totalEventsDelivered.Load(),
+		TotalReads:              a.totalReads.Load(),
+		LastWatchErrorAt:        lwe,
+		TotalDebounceFlushes:    a.totalDebounceFlushes.Load(),
+		LastFlushCoalescedCount: int(a.lastFlushCoalesced.Load()),
 	}
 }

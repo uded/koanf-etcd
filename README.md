@@ -185,6 +185,10 @@ Each later layer overrides earlier ones for keys it provides.
 - **Auth**: `WithAuth("user", "pass")`. Never hardcode — pull from env or a secret manager.
 - **BYO client lifecycle**: a BYO client is never closed by the Provider.
 
+## Observability
+
+The Provider does not log. It emits structured callbacks (`WithOnReconnect`, `WithOnResync`, `WithOnWatchError`, `OnEmpty`) and exposes a `Provider.Stats()` snapshot with cumulative counters (reads, puts, deletes, resyncs, reconnects, watch errors, events delivered, debounce flushes) plus the last-seen timestamps. Wire the snapshot into your RED/USE dashboard of choice; `WithOnWatchError` carries a `WatchErrorClass` so you can branch on transient vs. compaction vs. auth without parsing the error string.
+
 ## Atomic multi-key writes
 
 etcd has no multi-key atomicity in plain `Put`. The optional `etcdwrite` subpackage provides a transactional `PutAll`:

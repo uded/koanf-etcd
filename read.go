@@ -27,6 +27,7 @@ func (p *Provider) ReadBytes() ([]byte, error) {
 
 // readCtx is the context-aware backend for Read. The watch loop's resync
 // path threads its own ctx so shutdown isn't blocked by a slow re-read.
+// Increments TotalReads on a successful return.
 func (p *Provider) readCtx(parent context.Context) (map[string]any, error) {
 	if p.closed.Load() {
 		return nil, ErrClosed
@@ -34,13 +35,24 @@ func (p *Provider) readCtx(parent context.Context) (map[string]any, error) {
 	if p.settings.blob {
 		return nil, ErrUseParser
 	}
+	var (
+		out map[string]any
+		err error
+	)
 	if p.settings.key != "" {
-		return p.readSingle(parent)
+		out, err = p.readSingle(parent)
+	} else {
+		out, err = p.readPrefix(parent)
 	}
-	return p.readPrefix(parent)
+	if err != nil {
+		return nil, err
+	}
+	p.stats.totalReads.Add(1)
+	return out, nil
 }
 
-// readBytesCtx is the context-aware backend for ReadBytes.
+// readBytesCtx is the context-aware backend for ReadBytes. Increments
+// TotalReads on a successful return.
 func (p *Provider) readBytesCtx(parent context.Context) ([]byte, error) {
 	if p.closed.Load() {
 		return nil, ErrClosed
@@ -58,8 +70,9 @@ func (p *Provider) readBytesCtx(parent context.Context) ([]byte, error) {
 	p.stats.revision.Store(resp.Header.Revision)
 
 	if len(resp.Kvs) == 0 {
-		return nil, fmt.Errorf("%w: key=%q", ErrEmptyPrefix, p.settings.key)
+		return nil, fmt.Errorf("%w: key=%q", ErrKeyNotFound, p.settings.key)
 	}
+	p.stats.totalReads.Add(1)
 	return resp.Kvs[0].Value, nil
 }
 
@@ -77,7 +90,7 @@ func (p *Provider) readSingle(parent context.Context) (map[string]any, error) {
 
 	if len(resp.Kvs) == 0 {
 		if p.settings.strict {
-			return nil, fmt.Errorf("%w: key=%q", ErrEmptyPrefix, p.settings.key)
+			return nil, fmt.Errorf("%w: key=%q", ErrKeyNotFound, p.settings.key)
 		}
 		return map[string]any{}, nil
 	}

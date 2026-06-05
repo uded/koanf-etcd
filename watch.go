@@ -55,8 +55,9 @@ func (p *Provider) watchLoop(ctx context.Context) {
 			continue
 		}
 		if isFatalRPCError(fatalErr) {
+			p.recordWatchError()
 			if p.settings.onWatchError != nil {
-				p.settings.onWatchError(fmt.Errorf("koanf-etcd: fatal: %w", fatalErr))
+				p.settings.onWatchError(fmt.Errorf("koanf-etcd: fatal: %w", fatalErr), WatchErrorAuth)
 			}
 			return
 		}
@@ -92,20 +93,35 @@ func (p *Provider) initialWatchRevision() int64 {
 // ErrCompacted, it re-reads full state, emits a Resync event, and
 // returns (newRevision, true). Otherwise it returns (0, false).
 // It also invokes the OnWatchError callback for any fatal error.
+// Compaction is classified as WatchErrorCompaction (recoverable via
+// resync); other fatal errors are classified by classifyWatchError.
 func (p *Provider) tryHandleCompaction(ctx context.Context, fatalErr error) (int64, bool) {
 	if fatalErr == nil {
 		return 0, false
 	}
-	if p.settings.onWatchError != nil {
-		p.settings.onWatchError(fatalErr)
+	compacted := errors.Is(fatalErr, rpctypes.ErrCompacted)
+	// Only count non-compaction errors here; compaction is counted via
+	// TotalResyncs below to avoid double-counting one event in two
+	// buckets.
+	if !compacted {
+		p.recordWatchError()
+	} else {
+		// Compaction is a noteworthy event but not an "error" for the
+		// totalWatchErrors counter. Still track the timestamp so
+		// dashboards can correlate.
+		p.stats.lastWatchErrorUnix.Store(time.Now().UnixNano())
 	}
-	if !errors.Is(fatalErr, rpctypes.ErrCompacted) {
+	if p.settings.onWatchError != nil {
+		p.settings.onWatchError(fatalErr, classifyWatchError(fatalErr))
+	}
+	if !compacted {
 		return 0, false
 	}
 	resyncRev, err := p.resync(ctx)
 	if err != nil {
+		p.recordWatchError()
 		if p.settings.onWatchError != nil {
-			p.settings.onWatchError(fmt.Errorf("resync: %w", err))
+			p.settings.onWatchError(fmt.Errorf("resync: %w", err), WatchErrorTransient)
 		}
 		return 0, false
 	}
@@ -116,6 +132,34 @@ func (p *Provider) tryHandleCompaction(ctx context.Context, fatalErr error) (int
 	}
 	p.deliverResync(resyncRev)
 	return resyncRev, true
+}
+
+// recordWatchError bumps the watch-error counter and timestamp. Called
+// from each non-recoverable error path; compaction is excluded because
+// it lands under TotalResyncs.
+func (p *Provider) recordWatchError() {
+	p.stats.totalWatchErrors.Add(1)
+	p.stats.lastWatchErrorUnix.Store(time.Now().UnixNano())
+}
+
+// classifyWatchError maps an underlying watch error to a WatchErrorClass.
+// The classifier is intentionally narrow: compaction is its own class,
+// auth/permission failures are WatchErrorAuth, everything else maps to
+// WatchErrorTransient. Callers that need to distinguish further can
+// inspect the wrapped error directly.
+func classifyWatchError(err error) WatchErrorClass {
+	if err == nil {
+		// Unreachable in current call sites; documented for safety so
+		// callers that pass nil get a defined value back.
+		return WatchErrorTransient
+	}
+	if errors.Is(err, rpctypes.ErrCompacted) {
+		return WatchErrorCompaction
+	}
+	if isFatalRPCError(err) {
+		return WatchErrorAuth
+	}
+	return WatchErrorTransient
 }
 
 // clearWatchState resets the per-watch slot under watchMu so a future
@@ -143,12 +187,14 @@ func (p *Provider) signalWatchDone() {
 	p.watchMu.Unlock()
 }
 
-// recordReconnect updates stats and fires the OnReconnect callback.
+// recordReconnect updates stats and fires the OnReconnect callback. The
+// revision passed to the callback is the one the next watch will resume
+// from — callers can correlate reconnects with potential data-gap windows.
 func (p *Provider) recordReconnect(attempt int, lastErr error) {
 	p.stats.totalReconnects.Add(1)
 	p.stats.lastReconnUnix.Store(time.Now().UnixNano())
 	if p.settings.onReconnect != nil {
-		p.settings.onReconnect(attempt, lastErr)
+		p.settings.onReconnect(attempt, lastErr, p.stats.revision.Load())
 	}
 }
 
@@ -191,6 +237,8 @@ func (p *Provider) consumeWatch(ctx context.Context, ch clientv3.WatchChan) (dra
 		if cap(pending) > 4*len(batch) && cap(pending) > 1024 {
 			pending = nil
 		}
+		p.stats.totalDebounceFlushes.Add(1)
+		p.stats.lastFlushCoalesced.Store(int32(len(batch)))
 		p.deliverBatch(batch)
 	}
 	defer func() {
@@ -303,6 +351,7 @@ func (p *Provider) translateEvent(ev *clientv3.Event) *Event {
 func (p *Provider) deliverBatch(batch []Event) {
 	defer p.recoverWatchPanic("watch callback")
 	p.stats.lastBatch.Store(int32(len(batch)))
+	p.stats.totalEventsDelivered.Add(uint64(len(batch)))
 	p.watchMu.Lock()
 	cb := p.watchCb
 	tcb := p.watchTypedCb
@@ -394,21 +443,22 @@ func backoff(attempt int, min, max time.Duration) time.Duration {
 // recoverWatchPanic catches a panic in the watch goroutine or in a
 // user-supplied callback. The library is embedded in production
 // processes; we must not let a buggy callback take down the host.
-// Routes the panic via the OnWatchError hook and updates stats so
-// consumers can detect the event.
+// Routes the panic via the OnWatchError hook with WatchErrorFatal class
+// and updates stats so consumers can detect the event.
 func (p *Provider) recoverWatchPanic(site string) {
 	r := recover()
 	if r == nil {
 		return
 	}
 	err := fmt.Errorf("koanf-etcd: panic in %s: %v", site, r)
+	p.recordWatchError()
 	if p.settings.onWatchError != nil {
 		// Best-effort notify — guard against panicking callback inside
 		// the callback by NOT installing another recover here; if the
 		// onWatchError handler panics, the host process gets it.
 		func() {
 			defer func() { _ = recover() }()
-			p.settings.onWatchError(err)
+			p.settings.onWatchError(err, WatchErrorFatal)
 		}()
 	}
 }

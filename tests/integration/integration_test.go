@@ -400,7 +400,7 @@ func TestWatch_ReconnectsAfterClientClose(t *testing.T) {
 		ketcd.WithClient(cli),
 		ketcd.WithPrefix("/svc/"),
 		ketcd.WithReconnectBackoff(50*time.Millisecond, 500*time.Millisecond),
-		ketcd.WithOnReconnect(func(attempt int, lastErr error) {
+		ketcd.WithOnReconnect(func(attempt int, lastErr error, lastRevision int64) {
 			reconnects.Add(1)
 		}),
 	)
@@ -607,11 +607,11 @@ func TestWatch_AlreadyActiveError(t *testing.T) {
 	if err := p.Watch(func(_ any, _ error) {}); err != nil {
 		t.Fatalf("first watch: %v", err)
 	}
-	if err := p.Watch(func(_ any, _ error) {}); err == nil {
-		t.Fatalf("expected error on second Watch")
+	if err := p.Watch(func(_ any, _ error) {}); !errors.Is(err, ketcd.ErrWatchActive) {
+		t.Fatalf("expected ErrWatchActive on second Watch; got %v", err)
 	}
-	if err := p.WatchTyped(context.Background(), func([]ketcd.Event, error) {}); err == nil {
-		t.Fatalf("expected error on WatchTyped after Watch")
+	if err := p.WatchTyped(context.Background(), func([]ketcd.Event, error) {}); !errors.Is(err, ketcd.ErrWatchActive) {
+		t.Fatalf("expected ErrWatchActive on WatchTyped after Watch; got %v", err)
 	}
 }
 
@@ -756,7 +756,7 @@ func TestWatch_PanicInCallbackDoesNotCrash(t *testing.T) {
 	p, err := ketcd.New(
 		ketcd.WithClient(cli),
 		ketcd.WithPrefix("/svc/"),
-		ketcd.WithOnWatchError(func(err error) {
+		ketcd.WithOnWatchError(func(err error, class ketcd.WatchErrorClass) {
 			select {
 			case errCh <- err:
 			default:

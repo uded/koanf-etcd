@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Coherent observability and error-surface improvements. Three callback / sentinel changes are breaking; the new `Stats` fields are additive.
+
+### Changed (breaking)
+
+- `WithOnReconnect` callback signature is now `func(attempt int, lastErr error, lastRevision int64)`. The added `lastRevision` lets callers correlate reconnects with potential data-gap windows. Migration: add the third parameter to existing closures; the value is the revision the next watch will resume from.
+- `WithOnWatchError` callback signature is now `func(err error, class WatchErrorClass)`. Removes the need to string-match the error to decide whether to retry or page. Classes: `WatchErrorTransient`, `WatchErrorCompaction`, `WatchErrorAuth`, `WatchErrorFatal`.
+- `Watch` and `WatchTyped` now return the sentinel `ErrWatchActive` when a watch is already running (was a raw `fmt.Errorf`). Detect with `errors.Is`.
+- `ErrKeyNotFound` is new and is now returned by `ReadBytes` and by single-key `Read` (with `WithStrict`). `ErrEmptyPrefix` is retained for prefix-mode reads.
+
+### Added
+
+- `Stats` extended with `TotalWatchErrors`, `TotalEventsDelivered`, `TotalReads`, `LastWatchErrorAt`, `TotalDebounceFlushes`, `LastFlushCoalescedCount` for RED/USE-style dashboards.
+- `WatchErrorClass` enum (`WatchErrorTransient`, `WatchErrorCompaction`, `WatchErrorAuth`, `WatchErrorFatal`) consumed by the new `OnWatchError` signature.
+
 ## [0.2.3] - 2026-06-05
 
 First slice of the Medium-severity bug-fixes from the principal review. Two real correctness fixes, no API changes.
