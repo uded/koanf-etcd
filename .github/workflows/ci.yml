@@ -51,7 +51,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go: ['1.23', '1.24', '1.25']
+        # go.mod floor is 1.25; older toolchains can't build the transitive
+        # grpc/etcd graph in 2026. See README "Why go 1.25" for rationale.
+        go: ['1.25']
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v6
