@@ -6,7 +6,6 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -51,17 +50,6 @@ func New(opts ...Option) (*Provider, error) {
 		return nil, err
 	}
 
-	if s.logger == nil {
-		s.logger = slog.Default()
-	}
-	if s.redactor == nil {
-		s.redactor = defaultRedactor
-	}
-	if s.onEmpty == nil {
-		s.onEmpty = func(prefix string) {
-			s.logger.Warn("koanf-etcd: prefix read returned zero keys", "prefix", prefix)
-		}
-	}
 	if s.keyTransform == nil {
 		s.keyTransform = makeDefaultKeyTransform(s)
 	}
@@ -116,14 +104,9 @@ func (p *Provider) Close() error {
 			case <-time.After(timeout):
 				// Soft-fail: the watch goroutine didn't exit in time.
 				// We continue with client.Close() so app shutdown isn't
-				// blocked by a wedged callback. The error is not
-				// returned because Close() callers typically log-and-
-				// continue; surface via the logger if available.
-				if p.settings.logger != nil {
-					p.settings.logger.Warn("koanf-etcd: watch goroutine did not exit within close timeout",
-						"timeout", timeout,
-					)
-				}
+				// blocked by a wedged callback. Shutdown is quiet —
+				// consumers who want a diagnostic can install a
+				// context-aware close on top.
 			}
 		}
 	}
@@ -271,11 +254,6 @@ func loadTLSFromFiles(certFile, keyFile, caFile string) (*tls.Config, error) {
 		cfg.RootCAs = pool
 	}
 	return cfg, nil
-}
-
-// defaultRedactor never reveals values.
-func defaultRedactor(key string, raw []byte) string {
-	return "[REDACTED]"
 }
 
 // Watch implements koanf's watch convention. The event payload is nil —

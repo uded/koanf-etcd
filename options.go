@@ -3,7 +3,6 @@ package etcd
 import (
 	"context"
 	"crypto/tls"
-	"log/slog"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -101,12 +100,6 @@ func WithTLSServerName(name string) Option {
 	}
 }
 
-// WithLogger sets a *slog.Logger for the provider. Default: slog.Default().
-// The provider never logs values; redacted-by-default. See WithRedactor.
-func WithLogger(l *slog.Logger) Option {
-	return func(s *settings) error { s.logger = l; return nil }
-}
-
 // WithClientContext sets the Context the built-in client uses for its
 // lifecycle. Ignored when WithClient is set.
 func WithClientContext(ctx context.Context) Option {
@@ -202,7 +195,8 @@ func WithStrict(on bool) Option {
 }
 
 // OnEmpty registers a callback fired when a non-strict prefix read
-// returns zero keys. Default: a slog.Warn.
+// returns zero keys. Default: no callback (the empty result is silently
+// returned). Consumers wanting a log line or metric should set one.
 func OnEmpty(fn func(prefix string)) Option {
 	return func(s *settings) error { s.onEmpty = fn; return nil }
 }
@@ -286,20 +280,6 @@ func WithEventFilter(put, deleteEv bool) Option {
 // established. Useful for tests and as a startup gate.
 func WithCreatedNotify(on bool) Option {
 	return func(s *settings) error { s.createdNotify = on; return nil }
-}
-
-// WithRedactor sets a function that produces a safe display string for
-// a (key, value) pair. The library does not currently emit log lines
-// that contain etcd values — values are only delivered through the
-// Read / Watch return paths, where the caller controls handling.
-// WithRedactor is a forward-compatibility hook: when a future release
-// or a caller wraps the provider with their own logger, the redactor
-// can intercept any value-touching log line. The default redactor
-// returns "[REDACTED]". Set to func(k string, raw []byte) string {
-// return string(raw) } to disable redaction (NOT recommended in
-// production).
-func WithRedactor(fn func(key string, raw []byte) string) Option {
-	return func(s *settings) error { s.redactor = fn; return nil }
 }
 
 // WithOnReconnect fires after each successful watch reconnect. attempt is

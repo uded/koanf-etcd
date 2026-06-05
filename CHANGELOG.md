@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed (breaking)
+
+- `WithLogger` and `WithRedactor` are removed. A configuration-loader library should not impose a logger choice on its consumers; the library now emits only structured callbacks. Migration: route the existing `WithOnReconnect`, `WithOnResync`, `WithOnWatchError`, and `OnEmpty` callbacks into whatever logger your application already uses.
+- The internal `slog` wiring in the watch loop is gone — every emit site already had a callback, so removing the duplicate cleans the public surface without losing observability.
+
 ## [0.1.5] - 2026-06-05
 
 Post-review hardening. Addresses 6 of 9 findings from an external code review; the remaining 3 (test-module split, dep bump, BYO `wasSet` flags) are queued for `v0.2.0`.

@@ -3,7 +3,6 @@ package etcd
 import (
 	"context"
 	"crypto/tls"
-	"log/slog"
 	"sync/atomic"
 	"time"
 
@@ -30,8 +29,7 @@ type settings struct {
 	tlsKeyFile    string
 	tlsCAFile     string
 	tlsServerName string
-	clientCtx   context.Context
-	logger      *slog.Logger
+	clientCtx     context.Context
 
 	// mode
 	key    string
@@ -65,7 +63,6 @@ type settings struct {
 	wantDelete         bool
 	filterSet          bool // true once WithEventFilter explicitly applied
 	createdNotify      bool
-	redactor           func(key string, raw []byte) string
 	onReconnect        func(attempt int, lastErr error)
 	onResync           func(reason string, newRevision int64)
 	onWatchError       func(err error)

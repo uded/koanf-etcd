@@ -31,6 +31,11 @@ What it intentionally **is not**:
   with `WithKeepEmpty`.
 - **Compose with siblings.** Treat the Provider as one node in a koanf pipeline
   alongside structdefaults, validate, file, env, and other providers.
+- **Event model, not logging.** The library does not emit logs. Operational
+  events fire as callbacks: `OnReconnect`, `OnResync`, `OnWatchError`,
+  `OnEmpty`. Consumers route events into whatever logging stack they're already
+  using — slog, zerolog, zap, or none. A configuration-loader library has no
+  business imposing a logger choice on its host process.
 
 ## Module structure
 
@@ -42,7 +47,7 @@ write helpers.
 | `doc.go` | Package-level godoc and high-level usage examples. |
 | `errors.go` | Sentinel errors (`ErrClosed`, `ErrEmptyPrefix`, watch-fatal sentinels). |
 | `settings.go` | Internal `settings` struct, defaults, and the public `Stats` type. |
-| `options.go` | Functional `Option` constructors (`WithClient`, `WithDelimiter`, `WithReconnectBackoff`, `WithDebounce`, `WithKeepEmpty`, `WithRedactor`, TLS options, …). |
+| `options.go` | Functional `Option` constructors (`WithClient`, `WithDelimiter`, `WithReconnectBackoff`, `WithDebounce`, `WithStrict`, `OnEmpty`, TLS options, …). |
 | `transform.go` | Default key (`/` → delimiter) and value (`TrimSpace`) transforms. |
 | `etcd.go` | The `Provider` type, `New`, `Close`, the koanf `Read`/`ReadBytes` wiring, the `Watch`/`WatchTyped` shims, and the `Event`/`EventType` types. |
 | `read.go` | `Read` implementation: paginated range, key/value transform, unflatten. |

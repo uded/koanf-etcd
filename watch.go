@@ -38,13 +38,6 @@ func (p *Provider) watchLoop(ctx context.Context) {
 			return
 		}
 
-		if p.settings.logger != nil && attempt > 0 {
-			p.settings.logger.Info("koanf-etcd: watch reconnecting",
-				"attempt", attempt,
-				"start_revision", startRev,
-			)
-		}
-
 		ch := p.client.Watch(ctx, p.watchKey(), p.watchOpts(startRev)...)
 		drained, newRev, madeProgress, fatalErr := p.consumeWatch(ctx, ch)
 
@@ -62,11 +55,6 @@ func (p *Provider) watchLoop(ctx context.Context) {
 			continue
 		}
 		if isFatalRPCError(fatalErr) {
-			if p.settings.logger != nil {
-				p.settings.logger.Error("koanf-etcd: fatal watch error; not retrying",
-					"err", fatalErr.Error(),
-				)
-			}
 			if p.settings.onWatchError != nil {
 				p.settings.onWatchError(fmt.Errorf("koanf-etcd: fatal: %w", fatalErr))
 			}
@@ -126,11 +114,6 @@ func (p *Provider) tryHandleCompaction(ctx context.Context, fatalErr error) (int
 	if p.settings.onResync != nil {
 		p.settings.onResync("compaction", resyncRev)
 	}
-	if p.settings.logger != nil {
-		p.settings.logger.Warn("koanf-etcd: compaction recovery — resynced",
-			"new_revision", resyncRev,
-		)
-	}
 	p.deliverResync(resyncRev)
 	return resyncRev, true
 }
@@ -166,12 +149,6 @@ func (p *Provider) recordReconnect(attempt int, lastErr error) {
 	p.stats.lastReconnUnix.Store(time.Now().UnixNano())
 	if p.settings.onReconnect != nil {
 		p.settings.onReconnect(attempt, lastErr)
-	}
-	if p.settings.logger != nil {
-		p.settings.logger.Warn("koanf-etcd: scheduling reconnect",
-			"attempt", attempt,
-			"last_err", errString(lastErr),
-		)
 	}
 }
 
@@ -417,20 +394,14 @@ func backoff(attempt int, min, max time.Duration) time.Duration {
 // recoverWatchPanic catches a panic in the watch goroutine or in a
 // user-supplied callback. The library is embedded in production
 // processes; we must not let a buggy callback take down the host.
-// Routes the panic via the logger, the OnWatchError hook, and updates
-// stats so consumers can detect the event.
+// Routes the panic via the OnWatchError hook and updates stats so
+// consumers can detect the event.
 func (p *Provider) recoverWatchPanic(site string) {
 	r := recover()
 	if r == nil {
 		return
 	}
 	err := fmt.Errorf("koanf-etcd: panic in %s: %v", site, r)
-	if p.settings.logger != nil {
-		p.settings.logger.Error("koanf-etcd: panic recovered in watch path",
-			"site", site,
-			"panic", fmt.Sprint(r),
-		)
-	}
 	if p.settings.onWatchError != nil {
 		// Best-effort notify — guard against panicking callback inside
 		// the callback by NOT installing another recover here; if the
@@ -465,10 +436,3 @@ func isFatalRPCError(err error) bool {
 	return false
 }
 
-// errString gives a safe string form of an error, including nil.
-func errString(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
-}

@@ -1,11 +1,9 @@
 package integration_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -660,32 +658,6 @@ func TestStats_PutDeleteCounts(t *testing.T) {
 	}
 	if s.Revision == 0 {
 		t.Errorf("Revision = 0; want > 0")
-	}
-}
-
-func TestLog_RedactedByDefault(t *testing.T) {
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
-	cli := embeddedEtcd(t)
-	cli.Put(context.Background(), "/secret/key", "SUPER-SENSITIVE-VALUE")
-
-	p, err := ketcd.New(
-		ketcd.WithClient(cli),
-		ketcd.WithPrefix("/secret/"),
-		ketcd.WithLogger(logger),
-	)
-	if err != nil {
-		t.Fatalf("new: %v", err)
-	}
-	t.Cleanup(func() { _ = p.Close() })
-
-	if _, err := p.Read(); err != nil {
-		t.Fatalf("read: %v", err)
-	}
-
-	if bytes.Contains(buf.Bytes(), []byte("SUPER-SENSITIVE-VALUE")) {
-		t.Fatalf("secret value leaked into logs:\n%s", buf.String())
 	}
 }
 

@@ -198,7 +198,6 @@ func TestOptions_Watch(t *testing.T) {
 		WithProgressNotify(true),
 		WithEventFilter(true, false), // deliver only puts
 		WithCreatedNotify(true),
-		WithRedactor(func(k string, raw []byte) string { return "***" }),
 		WithOnReconnect(func(int, error) {}),
 		WithOnResync(func(string, int64) {}),
 		WithOnWatchError(func(error) {}),
@@ -209,7 +208,7 @@ func TestOptions_Watch(t *testing.T) {
 	}
 
 	filterOK := s.filterSet && s.wantPut && !s.wantDelete
-	callbacksSet := s.redactor != nil && s.onReconnect != nil && s.onResync != nil && s.onWatchError != nil
+	callbacksSet := s.onReconnect != nil && s.onResync != nil && s.onWatchError != nil
 
 	checks := []struct {
 		name string
