@@ -195,9 +195,9 @@ func buildClient(s *settings) (*clientv3.Client, error) {
 		// member can otherwise leave the client pinned to a dead
 		// endpoint indefinitely. Pass WithAutoSync(0) to opt out.
 		AutoSyncInterval: defaultIfZero(s.autoSync, 30*time.Second),
-		Username:             s.username,
-		Password:             s.password,
-		Context:              s.clientCtx,
+		Username:         s.username,
+		Password:         s.password,
+		Context:          s.clientCtx,
 	}
 
 	if s.srvService != "" {
