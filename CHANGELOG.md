@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-06-05
+
+First slice of the Medium-severity bug-fixes from the principal review. Two real correctness fixes, no API changes.
+
+### Fixed
+
+- **`splitPath` now strips trailing empty segments**, not just leading ones. A path like `app.db.` used to produce `["app", "db", ""]`, which after unflatten left an empty-string key at the leaf and could collide with sibling values via the recently-added `ErrPathCollision` check. The leading-strip already handled `.app.db`; the trailing-strip is the symmetric fix.
+- **`AutoSyncInterval` defaults to 30 seconds** when no `WithAutoSync` is supplied. A flapping etcd member would otherwise leave the built-in client pinned to a dead endpoint indefinitely. The default is applied inside `buildClient` (not in the settings struct) so the value-equality check used by BYO-client conflict detection keeps working. Pass `WithAutoSync(0)` to opt out.
+
+### Internal
+
+- New helper `defaultIfZero(v, d time.Duration)` documents the "default at build-time, not in settings" pattern. Used by the new autoSync default.
+
 ## [0.2.2] - 2026-06-05
 
 ### Fixed

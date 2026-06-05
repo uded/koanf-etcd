@@ -272,5 +272,11 @@ func splitPath(s, delim string) []string {
 	for len(out) > 0 && out[0] == "" {
 		out = out[1:]
 	}
+	// drop trailing empty produced when path ends with delim (e.g. "app.db.")
+	// — otherwise the empty segment becomes a "" key in the nested map and
+	// collides with any sibling leaf at that level.
+	for len(out) > 0 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
+	}
 	return out
 }

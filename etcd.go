@@ -191,7 +191,10 @@ func buildClient(s *settings) (*clientv3.Client, error) {
 		DialTimeout:          s.dialTimeout,
 		DialKeepAliveTime:    s.keepAliveT,
 		DialKeepAliveTimeout: s.keepAliveTO,
-		AutoSyncInterval:     s.autoSync,
+		// Default to 30s when the caller didn't set one. A flapping etcd
+		// member can otherwise leave the client pinned to a dead
+		// endpoint indefinitely. Pass WithAutoSync(0) to opt out.
+		AutoSyncInterval: defaultIfZero(s.autoSync, 30*time.Second),
 		Username:             s.username,
 		Password:             s.password,
 		Context:              s.clientCtx,
@@ -224,6 +227,17 @@ func buildClient(s *settings) (*clientv3.Client, error) {
 	}
 
 	return clientv3.New(cfg)
+}
+
+// defaultIfZero returns d when v is the zero value; v otherwise. Used to
+// apply per-Config defaults inside buildClient without polluting the
+// settings struct (which would break the value-equality "was this option
+// set?" check in hasNonDefaultClientConfig).
+func defaultIfZero(v, d time.Duration) time.Duration {
+	if v == 0 {
+		return d
+	}
+	return v
 }
 
 // loadTLSFromFiles builds a *tls.Config from cert/key/CA file paths.

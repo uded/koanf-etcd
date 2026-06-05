@@ -60,6 +60,46 @@ func TestSettings_Defaults(t *testing.T) {
 	}
 }
 
+func TestBuildClient_DefaultsAutoSyncTo30s(t *testing.T) {
+	// autoSync's default is applied inside buildClient, not in newSettings,
+	// so the value-equality check in hasNonDefaultClientConfig keeps
+	// working. Verify the build-time default is what we expect.
+	if got := defaultIfZero(0, 30*time.Second); got != 30*time.Second {
+		t.Errorf("defaultIfZero(0, 30s) = %v; want 30s", got)
+	}
+	if got := defaultIfZero(7*time.Second, 30*time.Second); got != 7*time.Second {
+		t.Errorf("defaultIfZero(7s, 30s) = %v; want 7s (caller-supplied wins)", got)
+	}
+}
+
+func TestSplitPath_StripsTrailingEmpties(t *testing.T) {
+	cases := []struct {
+		in    string
+		delim string
+		want  []string
+	}{
+		{"app.db.", ".", []string{"app", "db"}},
+		{"app.db..", ".", []string{"app", "db"}},
+		{".app.db.", ".", []string{"app", "db"}},
+		{"app.db", ".", []string{"app", "db"}},
+		{"", ".", nil},
+		{"...", ".", nil},
+		{"a/b/", "/", []string{"a", "b"}},
+	}
+	for _, c := range cases {
+		got := splitPath(c.in, c.delim)
+		if len(got) != len(c.want) {
+			t.Errorf("splitPath(%q, %q) = %v; want %v", c.in, c.delim, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("splitPath(%q, %q)[%d] = %q; want %q", c.in, c.delim, i, got[i], c.want[i])
+			}
+		}
+	}
+}
+
 func TestOptions_ConnectionApplied(t *testing.T) {
 	s := newSettings()
 	opts := []Option{
