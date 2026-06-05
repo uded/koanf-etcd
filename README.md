@@ -216,13 +216,35 @@ See `go doc github.com/uded/koanf-etcd` for the full surface. Highlights:
 | `WithResumeFromRevision(on)` | `true` |
 | `WithStrict(on)` | `false` |
 
-## Versioning
+## Versioning & Go floor
 
-- Go 1.23+
-- koanf v2 (current minor)
-- etcd client/v3 v3.5.x
+- **Go 1.25+** (this is higher than koanf v2 itself, which is on 1.23 — see below)
+- **koanf v2** (current minor — currently `v2.3.x`)
+- **etcd client/v3 `v3.5.x`** — pinned to the latest 3.5 patch; the 3.5 line is the widely-deployed LTS and is wire-compatible with 3.4/3.5/3.6 etcd servers
 
-SemVer applies once `v1.0.0` is tagged. Pre-1.0 versions may have breaking changes between minor releases.
+SemVer applies once `v1.0.0` is tagged. Pre-1.0 versions may have breaking changes between minor releases (CHANGELOG calls them out, conventional-commits `!` marker as well).
+
+### Why `go 1.25` when koanf v2 is on `go 1.23`?
+
+This is a real and deliberate gap. **koanf itself** pulls in a tiny runtime tree (`mapstructure` and friends), all of which still build cleanly on Go 1.23. **This provider** pulls in a much heavier dep tree — `go.etcd.io/etcd/client/v3` and its transitive `google.golang.org/grpc` graph, including a large slice of `golang.org/x/*` modules. In mid-2026 that entire grpc/etcd/x-tools ecosystem migrated their go.mod floor to `1.25.0`. Concretely:
+
+- `go.etcd.io/etcd/client/v3 v3.5.31` — the latest 3.5 patch — requires `go 1.25.0`. The last 3.5 patch that allows `go 1.23.0` is `v3.5.21` (about ten patch releases stale).
+- `google.golang.org/grpc v1.81+` requires `go 1.25.0`. `v1.74.x` was the last `go 1.23`-compatible line.
+- Every `golang.org/x/*` module pulled in by mid-2026 grpc/etcd (`x/net`, `x/sys`, `x/text`, `x/crypto`) declares `go 1.25.0`.
+
+We tried pinning all of those down to keep our floor at `1.23` to match koanf, and it works mechanically — but the price is real:
+
+| | Stay at `go 1.25` (chosen) | Pin everything down to `go 1.23` |
+| --- | --- | --- |
+| etcd | latest 3.5 patch | `v3.5.21` (~10 patches stale) |
+| grpc | latest stable | `v1.74.2` (~7 minors stale) |
+| `golang.org/x/*` | latest | manually pinned-old, fragile |
+| `govulncheck` | **0 advisories** | several non-callable advisories on older `x/net` + `x/sys` |
+| Maintenance | tracks upstream; clean for 6+ months | needs constant pinning every time a new transitive arrives |
+
+We picked **`go 1.25`**. Reasoning: this is a brand-new library, the security argument is binding, Go 1.25 has been the stable release line since early 2026, and the cost of asking new adopters to use a 6-month-old Go release is small. If you genuinely need `go 1.23` compatibility (build farm on an older toolchain, vendored CI), pin to `v0.1.x` of this library — that line was on `go 1.23` end-to-end. Pre-`v1.0.0` we may revisit if upstream catches up.
+
+The `go` directive controls only the consumer floor. The `toolchain` directive in `go.mod` is `go1.25.11`, which means anyone on an older Go toolchain (with the default `GOTOOLCHAIN=auto`) will auto-download `1.25.11` on first build — Go ships toolchain self-management out of the box. Consumers can disable that with `GOTOOLCHAIN=local`, in which case their local Go must satisfy the `1.25` floor.
 
 ## License
 
