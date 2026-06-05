@@ -13,17 +13,17 @@ import (
 // by applying functional Options. It is never exposed to callers.
 type settings struct {
 	// connection — either client (BYO) or built-in fields, never both
-	client      *clientv3.Client
-	endpoints   []string
-	srvService  string // SRV discovery: service / proto / domain
-	srvProto    string
-	srvDomain   string
-	dialTimeout time.Duration
-	keepAliveT  time.Duration
-	keepAliveTO time.Duration
-	autoSync    time.Duration
-	username    string
-	password    string
+	client        *clientv3.Client
+	endpoints     []string
+	srvService    string // SRV discovery: service / proto / domain
+	srvProto      string
+	srvDomain     string
+	dialTimeout   time.Duration
+	keepAliveT    time.Duration
+	keepAliveTO   time.Duration
+	autoSync      time.Duration
+	username      string
+	password      string
 	tlsCfg        *tls.Config
 	tlsCertFile   string
 	tlsKeyFile    string

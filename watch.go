@@ -435,4 +435,3 @@ func isFatalRPCError(err error) bool {
 	}
 	return false
 }
-
