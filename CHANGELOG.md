@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-06-05
+
+### Fixed
+
+- gofmt drift in `settings.go` and `watch.go` (struct-field alignment after the recent edits) — caught by the CI lint job. No behavioral change.
+
+### Retracted
+
+- `v0.2.0` is retracted in `go.mod`. It published successfully but its CI run failed on the gofmt check, so the release workflow never produced a GitHub Release or SBOM. Use `v0.2.1` or later.
+
 ## [0.2.0] - 2026-06-05
 
 Post-principal-review hardening pass. Closes the seventeen High-severity findings from the multi-agent audit. Adds an architectural split that's load-bearing for every future dep bump.

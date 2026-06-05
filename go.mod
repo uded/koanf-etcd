@@ -4,6 +4,10 @@ go 1.25.0
 
 toolchain go1.25.11
 
+retract (
+	v0.2.0 // gofmt drift in settings.go and watch.go made CI red; use v0.2.1 or later.
+)
+
 require (
 	github.com/knadh/koanf/parsers/yaml v1.1.0
 	github.com/knadh/koanf/v2 v2.3.5
