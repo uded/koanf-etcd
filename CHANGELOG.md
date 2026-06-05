@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `WithAuthProvider(fn)` — fetches etcd credentials just before client construction so callers using STS-style ephemeral credentials or secret-manager rotation don't have to keep long-lived strings on the heap. Mutually exclusive with `WithAuth`.
+- `SECURITY.md` — documents the threat model (what we defend against vs. don't), the SRV-discovery trust assumption, the Watch event-value trust boundary, and how to report vulnerabilities.
+
+### Documented
+
+- README "Security notes" section gained explicit pointers to the threat model, the Watch event-value trust caveat, and the SRV+DNS dependency.
+
 ## [0.3.0] - 2026-06-05
 
 Second-wave Medium-severity work from the principal review. Two coordinated PRs land together: an architectural cleanup (no API change) plus an observability + error-surface extension (breaking on three callback signatures, additive on `Stats`).

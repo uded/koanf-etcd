@@ -24,6 +24,7 @@ type settings struct {
 	autoSync      time.Duration
 	username      string
 	password      string
+	authProvider  func(context.Context) (user, pass string, err error)
 	tlsCfg        *tls.Config
 	tlsCertFile   string
 	tlsKeyFile    string

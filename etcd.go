@@ -170,6 +170,9 @@ func validateSettings(s *settings) error {
 	if s.client != nil && hasNonDefaultClientConfig(s) {
 		return fmt.Errorf("%w: WithClient mixed with built-in connection options", ErrOptionConflict)
 	}
+	if s.authProvider != nil && (s.username != "" || s.password != "") {
+		return fmt.Errorf("%w: WithAuth and WithAuthProvider are mutually exclusive", ErrOptionConflict)
+	}
 	if err := validateModeSettings(s); err != nil {
 		return err
 	}
@@ -181,6 +184,19 @@ func validateSettings(s *settings) error {
 
 // buildClient constructs a *clientv3.Client from settings.
 func buildClient(s *settings) (*clientv3.Client, error) {
+	user, pass := s.username, s.password
+	if s.authProvider != nil {
+		ctx := s.clientCtx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		u, p, err := s.authProvider(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("koanf-etcd: auth provider: %w", err)
+		}
+		user, pass = u, p
+	}
+
 	cfg := clientv3.Config{
 		Endpoints:            s.endpoints,
 		DialTimeout:          s.dialTimeout,
@@ -190,8 +206,8 @@ func buildClient(s *settings) (*clientv3.Client, error) {
 		// member can otherwise leave the client pinned to a dead
 		// endpoint indefinitely. Pass WithAutoSync(0) to opt out.
 		AutoSyncInterval: defaultIfZero(s.autoSync, 30*time.Second),
-		Username:         s.username,
-		Password:         s.password,
+		Username:         user,
+		Password:         pass,
 		Context:          s.clientCtx,
 	}
 

@@ -181,8 +181,11 @@ Each later layer overrides earlier ones for keys it provides.
 
 ## Security notes
 
+- **Threat model**: see [SECURITY.md](SECURITY.md) for what the library does and does not defend against, plus how to report vulnerabilities.
 - **TLS**: pass `*tls.Config` via `WithTLS` or load cert/key/CA files via `WithTLSFiles`. The two are mutually exclusive.
-- **Auth**: `WithAuth("user", "pass")`. Never hardcode — pull from env or a secret manager.
+- **Auth**: `WithAuth("user", "pass")`. Never hardcode — pull from env or a secret manager. For STS-style ephemeral credentials or secret-manager rotation, prefer `WithAuthProvider(fn)`; the function runs once just before client construction, so caller-owned credential buffers can be zeroed out immediately afterwards.
+- **Watch event values**: `Event.Value` from `WatchTyped` is raw, unvalidated bytes from etcd — any process with write access can put any bytes there. Validate before passing to shells, SQL, HTML-rendered logs, or file paths. `Read()` applies the value transform (TrimSpace by default); `WatchTyped` deliberately does not, so consumers parsing structured payloads (JSON/proto) don't pay the round-trip cost.
+- **SRV discovery**: `WithEndpointsFromSRV` trusts DNS at face value. Pair with TLS + `WithTLSServerName` if your DNS path isn't integrity-protected. See SECURITY.md for the full discussion.
 - **BYO client lifecycle**: a BYO client is never closed by the Provider.
 
 ## Observability

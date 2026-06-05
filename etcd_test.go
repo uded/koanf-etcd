@@ -629,6 +629,32 @@ func TestSplitCleanPath_MultiByteDelim(t *testing.T) {
 	}
 }
 
+func TestNew_WithAuthProvider_PropagatesError(t *testing.T) {
+	t.Parallel()
+	sentinel := errors.New("rotation failed")
+	fn := func(ctx context.Context) (string, string, error) {
+		return "", "", sentinel
+	}
+	_, err := New(WithEndpoints("127.0.0.1:1"), WithKey("/x"), WithAuthProvider(fn))
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("want wrapped sentinel, got %v", err)
+	}
+}
+
+func TestNew_WithAuth_AndAuthProvider_Conflict(t *testing.T) {
+	t.Parallel()
+	fn := func(context.Context) (string, string, error) { return "x", "y", nil }
+	_, err := New(
+		WithEndpoints("127.0.0.1:1"),
+		WithKey("/x"),
+		WithAuth("static-user", "static-pass"),
+		WithAuthProvider(fn),
+	)
+	if !errors.Is(err, ErrOptionConflict) {
+		t.Fatalf("want ErrOptionConflict, got %v", err)
+	}
+}
+
 func TestPrefixEnd_OverflowCarry(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

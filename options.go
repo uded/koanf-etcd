@@ -83,6 +83,30 @@ func WithAuth(user, pass string) Option {
 	}
 }
 
+// WithAuthProvider supplies a function that produces etcd credentials
+// at New() time. The function is called once, with the configured
+// client context (or context.Background if none), just before the
+// built-in clientv3.Client is constructed. The returned user/pass are
+// passed to clientv3.Config and then go out of scope here; the caller
+// can zero out any caller-owned buffers immediately.
+//
+// Use this for STS-style ephemeral credentials or secret-manager
+// rotation. For long-lived static credentials, WithAuth is simpler.
+//
+// Note: the etcd clientv3 library retains the credentials internally
+// for token-refresh against etcd's auth server, so this option does
+// NOT give you live rotation of an active connection — for that, use
+// WithClient(yourClient) and manage the client's lifecycle yourself.
+//
+// Mutually exclusive with WithAuth.
+func WithAuthProvider(fn func(context.Context) (user, pass string, err error)) Option {
+	return func(s *settings) error {
+		s.authProvider = fn
+		s.authSet = true
+		return nil
+	}
+}
+
 // WithTLS supplies a *tls.Config for the built-in client.
 func WithTLS(cfg *tls.Config) Option {
 	return func(s *settings) error {

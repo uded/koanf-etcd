@@ -330,6 +330,71 @@ func TestRead_AuthHappyPath(t *testing.T) {
 	}
 }
 
+func TestNew_WithAuthProvider_Called(t *testing.T) {
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 10*time.Second)
+
+	// Set up an authenticated user via the BYO client.
+	if _, err := cli.UserAdd(ctx, "bob", "passw0rd2"); err != nil {
+		t.Fatalf("UserAdd: %v", err)
+	}
+	if _, err := cli.RoleAdd(ctx, "reader2"); err != nil {
+		t.Fatalf("RoleAdd: %v", err)
+	}
+	if _, err := cli.RoleGrantPermission(ctx, "reader2", "/cfg2/", "/cfg20", 0 /*Read*/); err != nil {
+		t.Fatalf("RoleGrantPermission: %v", err)
+	}
+	if _, err := cli.UserGrantRole(ctx, "bob", "reader2"); err != nil {
+		t.Fatalf("UserGrantRole: %v", err)
+	}
+	if _, err := cli.UserAdd(ctx, "root", "root-pass"); err != nil {
+		t.Fatalf("UserAdd root: %v", err)
+	}
+	if _, err := cli.UserGrantRole(ctx, "root", "root"); err != nil {
+		t.Fatalf("UserGrantRole root: %v", err)
+	}
+	if _, err := cli.AuthEnable(ctx); err != nil {
+		t.Fatalf("AuthEnable: %v", err)
+	}
+	t.Cleanup(func() {
+		rootCli, err := clientv3.New(clientv3.Config{
+			Endpoints:   cli.Endpoints(),
+			DialTimeout: 5 * time.Second,
+			Username:    "root",
+			Password:    "root-pass",
+		})
+		if err == nil {
+			_, _ = rootCli.AuthDisable(ctx)
+			_ = rootCli.Close()
+		}
+	})
+
+	called := 0
+	fn := func(ctx context.Context) (string, string, error) {
+		called++
+		return "bob", "passw0rd2", nil
+	}
+
+	p, err := ketcd.New(
+		ketcd.WithEndpoints(cli.Endpoints()...),
+		ketcd.WithAuthProvider(fn),
+		ketcd.WithPrefix("/cfg2/"),
+	)
+	if err != nil {
+		t.Fatalf("new (auth provider): %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	if called != 1 {
+		t.Errorf("authProvider called %d times; want 1", called)
+	}
+
+	// Sanity round-trip: the rotated credentials should actually authenticate.
+	if _, err := p.Read(); err != nil {
+		t.Errorf("authed read with rotated credentials: %v", err)
+	}
+}
+
 func TestRead_TLS(t *testing.T) {
 	t.Skip("TLS embedded-etcd setup is a larger task; covered by Option-level tests for WithTLS / WithTLSFiles config wiring. End-to-end TLS verified manually against an external cluster pre-release.")
 }
