@@ -6,9 +6,11 @@ import (
 	"time"
 )
 
-// BenchmarkSplitPath measures the per-call cost of splitting a flat
-// key path. This runs once per kv in a prefix Read.
-func BenchmarkSplitPath(b *testing.B) {
+// BenchmarkSplitCleanPath measures the per-call cost of normalizing a
+// flat key path (trim leading/trailing empty segments). This is the
+// per-key hot path that feeds the collision-detection scan inside
+// unflattenMap.
+func BenchmarkSplitCleanPath(b *testing.B) {
 	cases := []struct {
 		name  string
 		path  string
@@ -23,14 +25,15 @@ func BenchmarkSplitPath(b *testing.B) {
 		b.Run(c.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				_ = splitPath(c.path, c.delim)
+				_ = splitCleanPath(c.path, c.delim)
 			}
 		})
 	}
 }
 
 // BenchmarkUnflatten_100Keys measures the cost of converting a 100-key
-// flat map into a nested map. Runs once per Read in tree mode.
+// flat map into a nested map (collision scan + koanf/maps.Unflatten).
+// Runs once per Read in tree mode.
 func BenchmarkUnflatten_100Keys(b *testing.B) {
 	flat := make(map[string]any, 100)
 	for i := 0; i < 100; i++ {

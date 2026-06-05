@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 func TestErrors_AreDistinctSentinels(t *testing.T) {
@@ -72,7 +74,7 @@ func TestBuildClient_DefaultsAutoSyncTo30s(t *testing.T) {
 	}
 }
 
-func TestSplitPath_StripsTrailingEmpties(t *testing.T) {
+func TestSplitCleanPath_StripsLeadingAndTrailingEmpties(t *testing.T) {
 	cases := []struct {
 		in    string
 		delim string
@@ -87,14 +89,14 @@ func TestSplitPath_StripsTrailingEmpties(t *testing.T) {
 		{"a/b/", "/", []string{"a", "b"}},
 	}
 	for _, c := range cases {
-		got := splitPath(c.in, c.delim)
+		got := splitCleanPath(c.in, c.delim)
 		if len(got) != len(c.want) {
-			t.Errorf("splitPath(%q, %q) = %v; want %v", c.in, c.delim, got, c.want)
+			t.Errorf("splitCleanPath(%q, %q) = %v; want %v", c.in, c.delim, got, c.want)
 			continue
 		}
 		for i := range got {
 			if got[i] != c.want[i] {
-				t.Errorf("splitPath(%q, %q)[%d] = %q; want %q", c.in, c.delim, i, got[i], c.want[i])
+				t.Errorf("splitCleanPath(%q, %q)[%d] = %q; want %q", c.in, c.delim, i, got[i], c.want[i])
 			}
 		}
 	}
@@ -472,4 +474,29 @@ func TestOptions_WithTLSServerName(t *testing.T) {
 	if s.tlsServerName != "etcd.example.com" {
 		t.Errorf("tlsServerName=%q; want etcd.example.com", s.tlsServerName)
 	}
+	if !s.tlsSet {
+		t.Errorf("WithTLSServerName must flip tlsSet for BYO-conflict detection")
+	}
+}
+
+// TestNew_BYOPlusDefaultEqualValueStillConflicts is the regression test
+// that motivated the wasSet refactor. The earlier value-equality check
+// would silently accept WithClient(...) + WithDialTimeout(5*time.Second)
+// because 5s matched the default. The wasSet flag flips on regardless
+// of value, so the conflict must be detected.
+func TestNew_BYOPlusDefaultEqualValueStillConflicts(t *testing.T) {
+	cli := newFakeClient()
+	_, err := New(WithClient(cli), WithKey("/x"), WithDialTimeout(5*time.Second))
+	if !errors.Is(err, ErrOptionConflict) {
+		t.Fatalf("expected ErrOptionConflict for BYO + WithDialTimeout(5s); got %v", err)
+	}
+}
+
+// newFakeClient returns a non-nil *clientv3.Client that is never
+// actually dialed. New() only assigns the pointer when WithClient is
+// supplied — it does not ping or otherwise touch the client — so an
+// empty struct is sufficient for BYO-conflict tests that fail before
+// any RPC could happen.
+func newFakeClient() *clientv3.Client {
+	return &clientv3.Client{}
 }

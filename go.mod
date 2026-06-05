@@ -5,11 +5,12 @@ go 1.25.0
 toolchain go1.25.11
 
 retract (
-	v0.2.0 // gofmt drift in settings.go and watch.go made CI red; use v0.2.2 or later.
 	v0.2.1 // TestClose_HonorsCloseTimeout upper bound was too tight for loaded CI runners; use v0.2.2 or later.
+	v0.2.0 // gofmt drift in settings.go and watch.go made CI red; use v0.2.2 or later.
 )
 
 require (
+	github.com/knadh/koanf/maps v0.1.2
 	github.com/knadh/koanf/parsers/yaml v1.1.0
 	github.com/knadh/koanf/v2 v2.3.5
 	go.etcd.io/etcd/api/v3 v3.5.31
@@ -23,7 +24,6 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
-	github.com/knadh/koanf/maps v0.1.2 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect

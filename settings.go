@@ -31,6 +31,18 @@ type settings struct {
 	tlsServerName string
 	clientCtx     context.Context
 
+	// wasSet tracks which connection options the caller explicitly
+	// supplied so BYO-client conflict detection doesn't depend on
+	// value-equality with defaults.
+	endpointsSet   bool
+	srvSet         bool
+	dialTimeoutSet bool
+	keepAliveSet   bool
+	autoSyncSet    bool
+	authSet        bool
+	tlsSet         bool // any of WithTLS / WithTLSFiles / WithTLSServerName
+	clientCtxSet   bool
+
 	// mode
 	key    string
 	prefix string

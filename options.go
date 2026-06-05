@@ -27,6 +27,7 @@ func WithClient(c *clientv3.Client) Option {
 func WithEndpoints(eps ...string) Option {
 	return func(s *settings) error {
 		s.endpoints = append([]string(nil), eps...)
+		s.endpointsSet = true
 		return nil
 	}
 }
@@ -38,13 +39,18 @@ func WithEndpointsFromSRV(service, proto, domain string) Option {
 		s.srvService = service
 		s.srvProto = proto
 		s.srvDomain = domain
+		s.srvSet = true
 		return nil
 	}
 }
 
 // WithDialTimeout sets the dial timeout for built-in client construction.
 func WithDialTimeout(d time.Duration) Option {
-	return func(s *settings) error { s.dialTimeout = d; return nil }
+	return func(s *settings) error {
+		s.dialTimeout = d
+		s.dialTimeoutSet = true
+		return nil
+	}
 }
 
 // WithKeepAlive sets gRPC keepalive time and timeout for the built-in
@@ -53,13 +59,18 @@ func WithKeepAlive(t, timeout time.Duration) Option {
 	return func(s *settings) error {
 		s.keepAliveT = t
 		s.keepAliveTO = timeout
+		s.keepAliveSet = true
 		return nil
 	}
 }
 
 // WithAutoSync sets the AutoSyncInterval for the built-in client.
 func WithAutoSync(d time.Duration) Option {
-	return func(s *settings) error { s.autoSync = d; return nil }
+	return func(s *settings) error {
+		s.autoSync = d
+		s.autoSyncSet = true
+		return nil
+	}
 }
 
 // WithAuth supplies username/password for the built-in client.
@@ -67,13 +78,18 @@ func WithAuth(user, pass string) Option {
 	return func(s *settings) error {
 		s.username = user
 		s.password = pass
+		s.authSet = true
 		return nil
 	}
 }
 
 // WithTLS supplies a *tls.Config for the built-in client.
 func WithTLS(cfg *tls.Config) Option {
-	return func(s *settings) error { s.tlsCfg = cfg; return nil }
+	return func(s *settings) error {
+		s.tlsCfg = cfg
+		s.tlsSet = true
+		return nil
+	}
 }
 
 // WithTLSFiles is a convenience that loads a client cert, key, and CA
@@ -84,6 +100,7 @@ func WithTLSFiles(certFile, keyFile, caFile string) Option {
 		s.tlsCertFile = certFile
 		s.tlsKeyFile = keyFile
 		s.tlsCAFile = caFile
+		s.tlsSet = true
 		return nil
 	}
 }
@@ -96,6 +113,7 @@ func WithTLSFiles(certFile, keyFile, caFile string) Option {
 func WithTLSServerName(name string) Option {
 	return func(s *settings) error {
 		s.tlsServerName = name
+		s.tlsSet = true
 		return nil
 	}
 }
@@ -103,7 +121,11 @@ func WithTLSServerName(name string) Option {
 // WithClientContext sets the Context the built-in client uses for its
 // lifecycle. Ignored when WithClient is set.
 func WithClientContext(ctx context.Context) Option {
-	return func(s *settings) error { s.clientCtx = ctx; return nil }
+	return func(s *settings) error {
+		s.clientCtx = ctx
+		s.clientCtxSet = true
+		return nil
+	}
 }
 
 // --- mode ---

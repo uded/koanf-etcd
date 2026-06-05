@@ -129,22 +129,17 @@ func (p *Provider) Stats() Stats {
 }
 
 // hasNonDefaultClientConfig reports whether any built-in client option
-// has been explicitly set. Used by validateSettings to detect
-// `WithClient + WithEndpoints/WithTLS/...` conflicts.
+// has been explicitly set by the caller. Used by validateSettings to
+// detect `WithClient + WithEndpoints/WithTLS/...` conflicts.
 func hasNonDefaultClientConfig(s *settings) bool {
-	return len(s.endpoints) > 0 ||
-		s.srvService != "" ||
-		s.dialTimeout != 5*time.Second || // non-default
-		s.keepAliveT != 0 ||
-		s.keepAliveTO != 0 ||
-		s.autoSync != 0 ||
-		s.username != "" ||
-		s.password != "" ||
-		s.tlsCfg != nil ||
-		s.tlsCertFile != "" ||
-		s.tlsKeyFile != "" ||
-		s.tlsCAFile != "" ||
-		s.clientCtx != nil
+	return s.endpointsSet ||
+		s.srvSet ||
+		s.dialTimeoutSet ||
+		s.keepAliveSet ||
+		s.autoSyncSet ||
+		s.authSet ||
+		s.tlsSet ||
+		s.clientCtxSet
 }
 
 // validateModeSettings enforces the WithKey / WithPrefix / WithBlob /
@@ -230,9 +225,9 @@ func buildClient(s *settings) (*clientv3.Client, error) {
 }
 
 // defaultIfZero returns d when v is the zero value; v otherwise. Used to
-// apply per-Config defaults inside buildClient without polluting the
-// settings struct (which would break the value-equality "was this option
-// set?" check in hasNonDefaultClientConfig).
+// apply per-Config defaults inside buildClient without baking them into
+// newSettings — keeps the settings struct's "applied" view minimal and
+// lets the build step own clientv3-specific defaults.
 func defaultIfZero(v, d time.Duration) time.Duration {
 	if v == 0 {
 		return d

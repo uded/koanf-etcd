@@ -3,7 +3,9 @@ package etcd
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	"github.com/knadh/koanf/maps"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
@@ -210,73 +212,76 @@ func (p *Provider) readOpts(withPrefix bool) []clientv3.OpOption {
 }
 
 // unflattenMap turns a flat map keyed by delim-separated paths into a
-// nested map[string]any. Identical semantics to confmap.Provider's
-// internal unflatten.
+// nested map[string]any, delegating the heavy lifting to
+// github.com/knadh/koanf/maps.Unflatten. It adds two behaviors that the
+// upstream helper deliberately omits:
+//
+//  1. Normalizes leading and trailing empty segments produced by keys
+//     like ".app.db" or "app.db." — otherwise those produce an empty-
+//     string key in the nested map.
+//  2. Reports ErrPathCollision when two etcd keys would resolve to
+//     paths where one is a prefix of the other (a leaf value cannot
+//     coexist with a sub-tree at the same path).
+//
+// When delim is empty, every key is treated literally and no
+// unflattening occurs.
 func unflattenMap(flat map[string]any, delim string) (map[string]any, error) {
-	out := make(map[string]any, len(flat))
-	for k, v := range flat {
-		if err := setNested(out, k, v, delim); err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
-func setNested(m map[string]any, path string, v any, delim string) error {
 	if delim == "" {
-		if existing, ok := m[path]; ok {
-			if _, isMap := existing.(map[string]any); isMap {
-				return fmt.Errorf("%w: key=%q would shadow sub-tree", ErrPathCollision, path)
-			}
+		out := make(map[string]any, len(flat))
+		for k, v := range flat {
+			out[k] = v
 		}
-		m[path] = v
-		return nil
+		return out, nil
 	}
-	parts := splitPath(path, delim)
-	cur := m
-	for i, p := range parts {
-		if i == len(parts)-1 {
-			if existing, ok := cur[p]; ok {
-				if _, isMap := existing.(map[string]any); isMap {
-					return fmt.Errorf("%w: key=%q would shadow sub-tree", ErrPathCollision, path)
-				}
-			}
-			cur[p] = v
-			return nil
+
+	cleaned := make(map[string]any, len(flat))
+	leaves := make(map[string]struct{}, len(flat))
+	subtrees := make(map[string]struct{}, len(flat))
+
+	for k, v := range flat {
+		parts := splitCleanPath(k, delim)
+		if len(parts) == 0 {
+			// All-empty path (e.g. "" or "...") — nothing meaningful to
+			// place; skip rather than producing an empty-key entry.
+			continue
 		}
-		next, ok := cur[p].(map[string]any)
-		if !ok {
-			if cur[p] != nil {
-				return fmt.Errorf("%w: key=%q parent segment %q is a leaf", ErrPathCollision, path, p)
-			}
-			next = make(map[string]any)
-			cur[p] = next
+		path := strings.Join(parts, delim)
+
+		// A previously-seen sub-tree at this exact path would be
+		// shadowed by placing a leaf here.
+		if _, isSubtree := subtrees[path]; isSubtree {
+			return nil, fmt.Errorf("%w: key=%q would shadow sub-tree", ErrPathCollision, path)
 		}
-		cur = next
+		// Walk parents — none may already be a leaf.
+		for i := 1; i < len(parts); i++ {
+			parent := strings.Join(parts[:i], delim)
+			if _, isLeaf := leaves[parent]; isLeaf {
+				return nil, fmt.Errorf("%w: key=%q parent %q is a leaf", ErrPathCollision, path, parent)
+			}
+			subtrees[parent] = struct{}{}
+		}
+
+		leaves[path] = struct{}{}
+		cleaned[path] = v
 	}
-	return nil
+
+	return maps.Unflatten(cleaned, delim), nil
 }
 
-func splitPath(s, delim string) []string {
-	out := []string{}
-	last := 0
-	for i := 0; i+len(delim) <= len(s); i++ {
-		if s[i:i+len(delim)] == delim {
-			out = append(out, s[last:i])
-			i += len(delim) - 1
-			last = i + 1
-		}
+// splitCleanPath splits s on delim and trims empty segments produced by
+// a leading or trailing delim (e.g. ".app.db" or "app.db."). Interior
+// empty segments are preserved — keys like "a..b" still place a "" key
+// inside "a", which matches our pre-koanf/maps behavior. This wrapper
+// exists because koanf/maps.Unflatten uses raw strings.Split, which
+// would otherwise create an empty-string key in the nested map for
+// edge-shaped keys.
+func splitCleanPath(s, delim string) []string {
+	parts := strings.Split(s, delim)
+	for len(parts) > 0 && parts[0] == "" {
+		parts = parts[1:]
 	}
-	out = append(out, s[last:])
-	// drop leading empty produced when path starts with delim (e.g. ".app.x")
-	for len(out) > 0 && out[0] == "" {
-		out = out[1:]
+	for len(parts) > 0 && parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
 	}
-	// drop trailing empty produced when path ends with delim (e.g. "app.db.")
-	// — otherwise the empty segment becomes a "" key in the nested map and
-	// collides with any sibling leaf at that level.
-	for len(out) > 0 && out[len(out)-1] == "" {
-		out = out[:len(out)-1]
-	}
-	return out
+	return parts
 }
