@@ -5,9 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-06-05
 
-Coherent observability and error-surface improvements. Three callback / sentinel changes are breaking; the new `Stats` fields are additive.
+Second-wave Medium-severity work from the principal review. Two coordinated PRs land together: an architectural cleanup (no API change) plus an observability + error-surface extension (breaking on three callback signatures, additive on `Stats`).
 
 ### Changed (breaking)
 
@@ -20,6 +20,11 @@ Coherent observability and error-surface improvements. Three callback / sentinel
 
 - `Stats` extended with `TotalWatchErrors`, `TotalEventsDelivered`, `TotalReads`, `LastWatchErrorAt`, `TotalDebounceFlushes`, `LastFlushCoalescedCount` for RED/USE-style dashboards.
 - `WatchErrorClass` enum (`WatchErrorTransient`, `WatchErrorCompaction`, `WatchErrorAuth`, `WatchErrorFatal`) consumed by the new `OnWatchError` signature.
+
+### Refactored
+
+- **BYO-conflict detection now uses explicit per-option `wasSet` flags** instead of value-equality with defaults. The old check would silently miss `WithClient + WithDialTimeout(5s)` (5s being the default); the new check fires regardless of value, and stops being brittle to future default changes.
+- **Switched unflattening to `github.com/knadh/koanf/maps`.** Deleted ~80 lines of home-grown `splitPath` / `unflattenMap` / `setNested` and replaced with a thin wrapper that adds the two behaviors the upstream helper deliberately omits: leading/trailing empty-segment normalization and `ErrPathCollision` detection for leaf-vs-subtree conflicts.
 
 ## [0.2.3] - 2026-06-05
 
