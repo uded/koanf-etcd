@@ -33,9 +33,39 @@ func (p *Provider) watchLoop(ctx context.Context) {
 	defer p.signalWatchDone()
 	startRev := p.initialWatchRevision()
 	attempt := 0
+	// pendingResync is set when compaction is observed but the follow-up
+	// resync() fails (e.g. etcd is also unreachable). In that state the
+	// next loop iteration must retry the resync DIRECTLY rather than
+	// opening a fresh Watch from the still-compacted startRev, which
+	// would just receive ErrCompacted again and burn a Watch RPC per
+	// wakeup while backoff escalates.
+	pendingResync := false
 	for {
 		if ctx.Err() != nil {
 			return
+		}
+
+		if pendingResync {
+			resyncRev, err := p.doResync(ctx)
+			if err == nil {
+				startRev = resyncRev + 1
+				pendingResync = false
+				attempt = 0
+				continue
+			}
+			// Still no etcd — back off and try the resync again on the
+			// next iteration without firing a Watch RPC we know will
+			// immediately ErrCompacted.
+			attempt++
+			wrapped := fmt.Errorf("pending resync: %w", err)
+			p.recordReconnect(attempt, wrapped)
+			if p.settings.onWatchError != nil {
+				p.settings.onWatchError(wrapped, WatchErrorTransient)
+			}
+			if !p.sleepBackoff(ctx, attempt) {
+				return
+			}
+			continue
 		}
 
 		ch := p.client.Watch(ctx, p.watchKey(), p.watchOpts(startRev)...)
@@ -53,6 +83,14 @@ func (p *Provider) watchLoop(ctx context.Context) {
 			startRev = resyncRev + 1
 			attempt = 0 // resync IS progress — restart cleanly
 			continue
+		}
+		// tryHandleCompaction returned ok=false: either fatalErr wasn't
+		// compaction, or it was compaction but the resync inside it
+		// failed. In the latter case, flip pendingResync so the next
+		// iteration retries the resync directly instead of re-opening a
+		// doomed Watch from the still-compacted revision.
+		if errors.Is(fatalErr, rpctypes.ErrCompacted) {
+			pendingResync = true
 		}
 		if isFatalRPCError(fatalErr) {
 			p.recordWatchError()
@@ -117,7 +155,7 @@ func (p *Provider) tryHandleCompaction(ctx context.Context, fatalErr error) (int
 	if !compacted {
 		return 0, false
 	}
-	resyncRev, err := p.resync(ctx)
+	resyncRev, err := p.doResync(ctx)
 	if err != nil {
 		p.recordWatchError()
 		if p.settings.onWatchError != nil {
@@ -125,13 +163,29 @@ func (p *Provider) tryHandleCompaction(ctx context.Context, fatalErr error) (int
 		}
 		return 0, false
 	}
+	return resyncRev, true
+}
+
+// doResync re-reads full state and, on success, fires all the bookkeeping
+// associated with a successful compaction recovery: stats counters,
+// OnResync callback, and the EventResync delivery to the watch callback.
+// Returns the new revision the watch should resume after, or the resync
+// error verbatim on failure so the caller can decide how to surface it.
+//
+// Lives here so both the first-shot path (tryHandleCompaction) and the
+// retry path (pendingResync in watchLoop) share one source of truth.
+func (p *Provider) doResync(ctx context.Context) (int64, error) {
+	resyncRev, err := p.resync(ctx)
+	if err != nil {
+		return 0, err
+	}
 	p.stats.totalResyncs.Add(1)
 	p.stats.lastResyncUnix.Store(time.Now().UnixNano())
 	if p.settings.onResync != nil {
 		p.settings.onResync("compaction", resyncRev)
 	}
 	p.deliverResync(resyncRev)
-	return resyncRev, true
+	return resyncRev, nil
 }
 
 // recordWatchError bumps the watch-error counter and timestamp. Called

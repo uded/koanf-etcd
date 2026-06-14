@@ -311,7 +311,16 @@ func (p *Provider) Watch(cb func(event any, err error)) error {
 
 // WatchTyped delivers []Event batches to cb. ctx cancels the watcher.
 // Mutually exclusive with Watch().
+//
+// Returns a wrapped context.Canceled / context.DeadlineExceeded if ctx is
+// already done at call time. Without this guard, a pre-cancelled ctx would
+// install watch state and launch a goroutine that exits on its first
+// ctx-check — leaving the caller waiting forever for a callback that will
+// never fire.
 func (p *Provider) WatchTyped(ctx context.Context, cb func([]Event, error)) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("koanf-etcd: WatchTyped: ctx already cancelled: %w", err)
+	}
 	p.watchMu.Lock()
 	defer p.watchMu.Unlock()
 	if p.closed.Load() {
