@@ -165,6 +165,29 @@ _ = p.WatchTyped(ctx, func(evs []ketcd.Event, err error) {
 })
 ```
 
+### Watch lifecycle
+
+`Watch(cb)` and `WatchTyped(ctx, cb)` are **mutually exclusive** — only one watch is active per Provider at a time. Calling either while a watch is already running returns the sentinel `ErrWatchActive`; detect with `errors.Is(err, ketcd.ErrWatchActive)` rather than string-matching.
+
+A running watch stops on exactly three conditions:
+
+- **`Close()`** — synchronous, waits for the loop to exit up to `WithCloseTimeout` (default `5s`), then falls back to closing the client regardless. Bound it tighter or looser to taste.
+- **Parent context cancel** — `WithWatchContext` for `Watch`, or the explicit `ctx` argument for `WatchTyped`. This is the common runtime-switchover path.
+- **Fatal RPC error** — auth or permission-denied is surfaced via `WithOnWatchError` with `class == WatchErrorAuth`, the loop returns, and the watch is not retried. Other classes (`Transient`, `Compaction`) are retried internally.
+
+When a parent ctx cancels the loop, the Provider's internal watch state clears as the goroutine unwinds. You can then start a fresh watch — different callback, different filter — without going through `Close()`. This is the right escape hatch for "swap the callback at runtime" patterns:
+
+```go
+watchCtx, cancelWatch := context.WithCancel(context.Background())
+_ = p.WatchTyped(watchCtx, oldCallback)
+// ... later ...
+cancelWatch()
+// state clears after the loop exits (within a few ms — Close honors the same timeout via WithCloseTimeout)
+_ = p.WatchTyped(context.Background(), newCallback)
+```
+
+One subtle behavior to know about: pre-cancelling the `ctx` you pass to `WatchTyped` is now rejected with a wrapped `context.Canceled` (detect with `errors.Is`). This is a v0.3.2 change; previously the loop would silently start, immediately exit, and the user's callback would never fire — a footgun in tests that reuse a cancelled context.
+
 ## Interop with `koanf-structdefaults` and friends
 
 Load order: struct-defaults (floor) → file → etcd (live) → env (pins/secrets).
@@ -208,20 +231,88 @@ etcdwrite.PutAll(ctx, cli, map[string]string{
 
 All three land at the same revision or none do. A watcher with `WithDebounce` coalesces the resulting events into a single reload.
 
-## Options reference (abridged)
+## Troubleshooting
 
-See `go doc github.com/uded/koanf-etcd` for the full surface. Highlights:
+Real gotchas, in rough order of frequency:
 
-| Option | Default |
-| --- | --- |
-| `WithDelim(s)` | `"."` |
-| `WithUnflatten(on)` | `true` |
-| `WithTrimPrefix(on)` | `true` (in prefix mode) |
-| `WithReadTimeout(d)` | `5s` |
-| `WithReconnectBackoff(min, max)` | `1s..2min` |
-| `WithDebounce(d)` | `0` (off) |
-| `WithResumeFromRevision(on)` | `true` |
-| `WithStrict(on)` | `false` |
+- **`Read()` returns `ErrPathCollision`.** Etcd holds both `/svc/db = ...` and `/svc/db/host = ...` under the same prefix; the nested map can't carry a leaf and a sub-tree at the same path. Either rename one of the keys in etcd, or pass `WithUnflatten(false)` to get a flat map and skip nesting entirely.
+- **Watch callback never fires.** Three likely causes: (a) you passed a cancelled `ctx` to `WatchTyped` — since v0.3.2 this is rejected with a wrapped `context.Canceled` instead of starting a stillborn loop; (b) you called `p.Watch(cb)` without first calling `p.Read()` while `WithResumeFromRevision(true)` is on (default), so the loop is waiting at revision 0 and no event past that boundary delivers; (c) the parent context cancelled silently — wire `WithOnWatchError` to surface that.
+- **`Close()` hangs.** A watch callback is blocking. Default `WithCloseTimeout` is `5s` — past that, `Close()` proceeds to tear down the client regardless. If you need a different bound (a CLI tool wants `1s`, a long-running daemon wants `30s`), supply `WithCloseTimeout(d)` at construction.
+- **Reconnect backoff feels wrong.** It's exponential-with-full-jitter, bounded `[min, max]`. Defaults are `min=1s, max=2min`. Override with `WithReconnectBackoff(min, max)`. The `OnReconnect` callback's third argument (`lastRevision`) tells you where the next watch will resume — useful to correlate reconnects with potential data-gap windows.
+- **CI green locally, red on GitHub Actions.** Most often a gofmt drift after struct-field edits (alignment shifts as field names get longer or shorter). Run `gofmt -w .` before pushing, or read the lint job's diff in the failure log.
+- **`govulncheck` flags transitive vulnerabilities.** The main module is kept lean; the test harness lives in `tests/integration/` as a separate module and deliberately holds `go.etcd.io/etcd/server/v3` and its transitive tree. Run vulnerability scans against the main module only — the integration module isn't consumer-facing.
+- **Want to log everything the library does.** The library doesn't log — by design. Wire the four observability callbacks (`WithOnReconnect`, `WithOnResync`, `WithOnWatchError`, `OnEmpty`) into your logger of choice, and read `Provider.Stats()` periodically for dashboards.
+
+## Options reference
+
+Full surface at [pkg.go.dev](https://pkg.go.dev/github.com/uded/koanf-etcd). The table below covers every option whose default matters or where there's a non-obvious gotcha — grouped by area for skimming. Trivially named options whose behavior is obvious from the signature (e.g. `WithEndpoints`) are omitted; see the godoc for those.
+
+### Connection
+
+| Option | Default | Notes |
+| --- | --- | --- |
+| `WithClient(c)` | — | BYO `*clientv3.Client`. Mutually exclusive with all other connection options. `Close()` will **not** close it. |
+| `WithEndpointsFromSRV(svc, proto, domain)` | — | DNS SRV discovery at `New()` time. Pair with `WithTLS` + `WithTLSServerName` unless your DNS path is integrity-protected. |
+| `WithDialTimeout(d)` | `5s` | Built-in client only. |
+| `WithKeepAlive(t, timeout)` | off | gRPC keepalive for the built-in client. |
+| `WithAutoSync(d)` | `30s` | `0` opts out. Stops a flapping member from pinning the built-in client to a dead endpoint. |
+| `WithAuth(user, pass)` | — | Static credentials. Mutually exclusive with `WithAuthProvider`. |
+| `WithAuthProvider(fn)` | — | Fetches credentials just before client construction — STS / secret-manager rotation. Caller can zero buffers immediately after. Mutually exclusive with `WithAuth`. |
+| `WithTLS(cfg)` | — | Mutually exclusive with `WithTLSFiles`. |
+| `WithTLSFiles(cert, key, ca)` | — | Convenience loader. |
+| `WithTLSServerName(name)` | — | Required when connecting to etcd by IP — the cert's SAN must otherwise include the literal IP. |
+| `WithClientContext(ctx)` | `context.Background()` | Lifecycle context for the built-in client. Ignored under `WithClient`. |
+
+### Mode
+
+| Option | Default | Notes |
+| --- | --- | --- |
+| `WithKey(k)` | — | Single-key mode. Mutually exclusive with `WithPrefix`. |
+| `WithPrefix(p)` | — | Tree mode. Mutually exclusive with `WithKey`. |
+| `WithBlob()` | off | Blob mode: `Read()` returns `ErrUseParser`, `ReadBytes()` returns the raw value. Requires `WithKey`. Implies `WithUnflatten(false)`. |
+
+### Read shaping
+
+| Option | Default | Notes |
+| --- | --- | --- |
+| `WithDelim(s)` | `"."` | Path delimiter used for unflattening. |
+| `WithTrimPrefix(on)` | `true` (prefix mode) | Strips the configured prefix from each key before mapping. |
+| `WithUnflatten(on)` | `true` | Convert flat dotted keys to nested maps. Disable for raw flat layout — also the workaround for `ErrPathCollision`. |
+| `WithKeyTransform(fn)` | `/`→delim | Runs after prefix trim. Override only if you need non-trivial key shaping. |
+| `WithValueTransform(fn)` | TrimSpace→string | Replace to e.g. parse JSON inline. Note `WatchTyped` skips this — `Event.Value` is raw bytes. |
+| `WithLimit(n)` | `0` (no pagination) | Page size for prefix reads. Set `>0` for prefixes over ~1k keys. |
+| `WithSerializable(on)` | `false` | Faster, lighter on the cluster, may return slightly stale data. Fine for boot-time defaults. |
+| `WithReadRevision(rev)` | `0` (current) | Reproducible snapshot reads. |
+| `WithReadTimeout(d)` | `5s` | Bounds each `Get`. |
+
+### Empty handling
+
+| Option | Default | Notes |
+| --- | --- | --- |
+| `WithStrict(on)` | `false` | A zero-key prefix read returns `ErrEmptyPrefix` instead of silently succeeding. Recommended for production boots. |
+| `OnEmpty(fn)` | — | Callback fired (non-strict mode) when a prefix read yields zero keys. Wire to a metric or log line. |
+
+### Watch
+
+| Option | Default | Notes |
+| --- | --- | --- |
+| `WithWatchContext(ctx)` | provider's internal ctx | Cancellable parent for the watch goroutine. See "Watch lifecycle" above. |
+| `WithDebounce(window)` | `0` (off) | Coalesces a burst into one callback. Recommended `100ms`-`1s` for scripted multi-put rollouts. |
+| `WithMaxPendingEvents(n)` | `10000` | Cap on buffered debounced events; an early flush fires at the cap. `0` disables the cap. |
+| `WithReconnectBackoff(min, max)` | `1s..2min` | Exponential with full jitter. `attempt` resets only on real progress, so flapping clusters can't reset the cap. |
+| `WithResumeFromRevision(on)` | `true` | Starts the watch at `initialReadRevision + 1` — closes the read/watch gap. |
+| `WithProgressNotify(on)` | `false` | Periodic empty responses from etcd to confirm liveness. |
+| `WithEventFilter(put, del)` | both | Semantics are inclusive: each `true` means "deliver this type". `(false, false)` mutes the watch; `(true, true)` is equivalent to not calling. When exactly one is true, the filter is server-side — unwanted events never cross the wire. |
+| `WithCreatedNotify(on)` | `false` | Empty response confirming the watch is established. Useful for tests and startup gating. |
+
+### Observability
+
+| Option | Default | Notes |
+| --- | --- | --- |
+| `WithOnReconnect(fn)` | — | `(attempt, lastErr, lastRevision)`. The revision is where the next watch resumes from — useful for data-gap correlation. |
+| `WithOnResync(fn)` | — | Fires after a resync (typically compaction recovery) completes, with the new revision. |
+| `WithOnWatchError(fn)` | — | `(err, class)`. Branch on `WatchErrorTransient` / `Compaction` / `Auth` / `Fatal` without string-matching. |
+| `WithCloseTimeout(d)` | `5s` | How long `Close()` waits for the watch goroutine to exit before falling back to closing the client. `0` waits forever. |
 
 ## Versioning & Go floor
 

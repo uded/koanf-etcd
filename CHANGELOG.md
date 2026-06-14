@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The watch loop no longer fires a doomed `Watch` RPC after a compaction recovery whose `resync()` itself failed. Previously each wakeup re-opened a watch from the still-compacted revision, immediately re-receiving `ErrCompacted`. The loop now tracks a `pendingResync` state and retries the full re-read directly until etcd is reachable again.
 - `WatchTyped(ctx, cb)` now returns a wrapped `context.Canceled` immediately when the supplied `ctx` is already cancelled at call time, instead of starting a goroutine that exits silently and leaves the caller waiting forever for a callback that never fires.
 
+### Documented
+
+- README gained a "Watch lifecycle" subsection covering start/stop/restart of the watch loop, including the v0.3.2 behavior change for `WatchTyped` with a pre-cancelled context.
+- README "Options reference" was rewritten from an 8-row abridged table to a grouped, ~25-row near-complete reference covering every option whose default matters or where a gotcha would otherwise force a `go doc` lookup.
+- README gained a "Troubleshooting" section with real gotchas (path collisions, callbacks never firing, `Close()` hangs, gofmt-drift CI failures, etc.).
+- ARCHITECTURE.md explains why `etcdwrite` is a separate subpackage and not methods on `Provider`.
+
 ## [0.3.1] - 2026-06-05
 
 ### Added
