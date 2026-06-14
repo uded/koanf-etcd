@@ -112,6 +112,31 @@ Write helpers exist to support common patterns (atomic multi-key rollouts via
 etcd transactions, value-with-lease writes), but living off the read path
 means the Provider's API never tempts a caller into writing a config back
 through it. The separation is intentional and structural, not stylistic.
+Four things follow from that choice:
+
+1. **Reading and writing are different concerns.** The Provider feeds config
+   into koanf. Writing into etcd is a separate concern with separate dangers
+   — delete-everything foot-guns, transactional semantics across multiple
+   keys, audit trails. Folding them into one type would let one set of those
+   concerns leak into the other's review surface.
+
+2. **No accidental writes through the Provider.** The `Provider` type has
+   no `Put`, `Delete`, or any mutating method. Code that intentionally
+   imports `etcdwrite "github.com/uded/koanf-etcd/write"` is signaling
+   deliberate write access — both code review and security review have a
+   single import-line gate to look at, and a `grep -r etcdwrite` answers
+   "who writes to etcd through this library?" in one shot.
+
+3. **Different import surface.** Most consumers only need the read side.
+   Keeping write helpers off the main path means they don't pull
+   `etcdwrite`'s symbols into godoc, IDE autocomplete, or supply-chain
+   audits for read-only consumers.
+
+4. **Where transactional writes live.** `PutAll` (a single etcd transaction
+   across N keys, all-or-nothing) and the recent `DeletePrefix`
+   empty-prefix guard live in `write/`. Consumers using a separate
+   etcd-write tool or writing directly via `clientv3.Client` skip the
+   subpackage entirely — it's opt-in by import.
 
 **Why raw bytes in `WatchTyped`'s `Event.Value`.** Consumers may want to
 parse JSON, protobuf, or some other binary payload without first round-tripping
