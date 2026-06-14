@@ -98,8 +98,13 @@ func newSettings() *settings {
 		reconnectMin:       1 * time.Second,
 		reconnectMax:       2 * time.Minute,
 		resumeFromRevision: true,
-		strict:             false,
-		closeTimeout:       5 * time.Second,
+		// progressNotify defaults to true so a long-quiet watch (config
+		// rarely changes) can't sit on a silently-wedged gRPC stream.
+		// Etcd's periodic empty-progress notifications act as a cheap
+		// liveness probe. Opt out with WithProgressNotify(false).
+		progressNotify: true,
+		strict:         false,
+		closeTimeout:   5 * time.Second,
 	}
 }
 

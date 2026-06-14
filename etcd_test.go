@@ -66,6 +66,9 @@ func TestSettings_Defaults(t *testing.T) {
 	if s.strict {
 		t.Errorf("default strict = true, want false")
 	}
+	if !s.progressNotify {
+		t.Errorf("default progressNotify = false, want true")
+	}
 }
 
 func TestBuildClient_DefaultsAutoSyncTo30s(t *testing.T) {

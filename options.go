@@ -294,9 +294,11 @@ func WithResumeFromRevision(on bool) Option {
 	return func(s *settings) error { s.resumeFromRevision = on; return nil }
 }
 
-// WithProgressNotify enables clientv3.WithProgressNotify on the watch
+// WithProgressNotify toggles clientv3.WithProgressNotify on the watch
 // stream — etcd sends periodic empty responses so the watcher can confirm
-// liveness even when no keys change.
+// liveness even when no keys change. Defaults to ON; pass
+// WithProgressNotify(false) to opt out. A long-quiet watch against a
+// silently-wedged gRPC stream is an easy correctness hazard without it.
 func WithProgressNotify(on bool) Option {
 	return func(s *settings) error { s.progressNotify = on; return nil }
 }
@@ -328,11 +330,17 @@ func WithCreatedNotify(on bool) Option {
 	return func(s *settings) error { s.createdNotify = on; return nil }
 }
 
-// WithOnReconnect fires after each reconnect attempt is scheduled.
-//   - attempt: 1-indexed retry count since the last successful connect.
-//   - lastErr: the error that caused the reconnect.
-//   - lastRevision: the revision the next watch will resume from.
+// WithOnReconnect fires AFTER a watch session that follows one or more
+// failures actually starts delivering events again — i.e. after a real
+// recovery, not before the next attempt.
+//   - attempt: the number of failed sessions that preceded this
+//     recovery. Always >= 1 when the callback fires.
+//   - lastErr: the error from the most-recent failure.
+//   - lastRevision: the etcd revision the recovered session resumed at.
 //     Useful to correlate reconnects with potential data-gap windows.
+//
+// Consumers that want a per-failure signal should use WithOnWatchError
+// instead — it fires on every failure with a WatchErrorClass.
 func WithOnReconnect(fn func(attempt int, lastErr error, lastRevision int64)) Option {
 	return func(s *settings) error { s.onReconnect = fn; return nil }
 }

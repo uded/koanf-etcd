@@ -40,6 +40,13 @@ func (p *Provider) watchLoop(ctx context.Context) {
 	// would just receive ErrCompacted again and burn a Watch RPC per
 	// wakeup while backoff escalates.
 	pendingResync := false
+	// Track the most-recent failure across iterations so OnReconnect
+	// can fire AFTER a session that actually delivers events again,
+	// not before the next attempt. failedAttempts counts how many
+	// failed sessions preceded the eventual recovery; lastFailErr is
+	// the error from the most-recent failure.
+	failedAttempts := 0
+	var lastFailErr error
 	for {
 		if ctx.Err() != nil {
 			return
@@ -51,6 +58,14 @@ func (p *Provider) watchLoop(ctx context.Context) {
 				startRev = resyncRev + 1
 				pendingResync = false
 				attempt = 0
+				// A successful resync after one or more failures is
+				// the recovery signal — fire OnReconnect now and
+				// reset the failure bookkeeping.
+				if failedAttempts > 0 {
+					p.fireReconnect(failedAttempts, lastFailErr, p.stats.revision.Load())
+					failedAttempts = 0
+					lastFailErr = nil
+				}
 				continue
 			}
 			// Still no etcd — back off and try the resync again on the
@@ -59,6 +74,8 @@ func (p *Provider) watchLoop(ctx context.Context) {
 			attempt++
 			wrapped := fmt.Errorf("pending resync: %w", err)
 			p.recordReconnect(attempt, wrapped)
+			failedAttempts = attempt
+			lastFailErr = wrapped
 			if p.settings.onWatchError != nil {
 				p.settings.onWatchError(wrapped, WatchErrorTransient)
 			}
@@ -77,11 +94,30 @@ func (p *Provider) watchLoop(ctx context.Context) {
 		// reconnectMax instead of pinning at min.
 		if madeProgress {
 			attempt = 0
+			// A session that actually delivered events after one or
+			// more failed sessions is the recovery signal — fire
+			// OnReconnect now and reset the failure bookkeeping.
+			if failedAttempts > 0 {
+				p.fireReconnect(failedAttempts, lastFailErr, p.stats.revision.Load())
+				failedAttempts = 0
+				lastFailErr = nil
+			}
 		}
 
 		if resyncRev, ok := p.tryHandleCompaction(ctx, fatalErr); ok {
 			startRev = resyncRev + 1
 			attempt = 0 // resync IS progress — restart cleanly
+			// Compaction-then-inline-resync IS the recovery cycle:
+			// the compaction is the failure, the resync is the
+			// successful recovery. Roll the existing failed-session
+			// count forward (so a session that failed transiently
+			// and THEN saw compaction reports the cumulative count)
+			// and fire OnReconnect once.
+			recoverAttempts := failedAttempts + 1
+			recoverErr := fatalErr
+			p.fireReconnect(recoverAttempts, recoverErr, p.stats.revision.Load())
+			failedAttempts = 0
+			lastFailErr = nil
 			continue
 		}
 		// tryHandleCompaction returned ok=false: either fatalErr wasn't
@@ -108,6 +144,10 @@ func (p *Provider) watchLoop(ctx context.Context) {
 
 		attempt++
 		p.recordReconnect(attempt, fatalErr)
+		// Remember this failure so the next successful session can
+		// report how many attempts it took to recover.
+		failedAttempts = attempt
+		lastFailErr = fatalErr
 		if !p.sleepBackoff(ctx, attempt) {
 			return
 		}
@@ -241,14 +281,22 @@ func (p *Provider) signalWatchDone() {
 	p.watchMu.Unlock()
 }
 
-// recordReconnect updates stats and fires the OnReconnect callback. The
-// revision passed to the callback is the one the next watch will resume
-// from — callers can correlate reconnects with potential data-gap windows.
-func (p *Provider) recordReconnect(attempt int, lastErr error) {
+// recordReconnect bumps the reconnect counters. The OnReconnect callback
+// is fired separately by fireReconnect — only after a reconnect actually
+// succeeds — so the counters here track how often the loop scheduled a
+// retry, while the callback tracks recoveries.
+func (p *Provider) recordReconnect(attempt int, _ error) {
 	p.stats.totalReconnects.Add(1)
 	p.stats.lastReconnUnix.Store(time.Now().UnixNano())
+}
+
+// fireReconnect fires the OnReconnect callback after a successful
+// reconnect. attempts is the number of failed sessions that preceded
+// this success; lastErr is the error from the most-recent failure;
+// revision is the etcd revision the recovered session resumed at.
+func (p *Provider) fireReconnect(attempts int, lastErr error, revision int64) {
 	if p.settings.onReconnect != nil {
-		p.settings.onReconnect(attempt, lastErr, p.stats.revision.Load())
+		p.settings.onReconnect(attempts, lastErr, revision)
 	}
 }
 

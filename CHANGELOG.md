@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed (breaking)
+
+- **`OnReconnect` callback now fires after a successful reconnect, not before the next attempt.** The semantic was misleading before — the callback fired with intent ("we're about to back off and retry") even though its name suggested post-success. After this change, `OnReconnect(attempts, lastErr, revision)` fires only when a watch session that follows one or more failures actually starts delivering events again (or when a resync after a failure succeeds). `attempts` reports how many failed sessions preceded the recovery; `lastErr` is the most-recent failure's error; `revision` is the etcd revision the recovered session resumed at. Consumers using the old fires-before-attempt semantics should reach for `OnWatchError` instead (it fires on every failure with a `WatchErrorClass`).
+
+### Changed
+
+- **`WithProgressNotify` is now default-on.** A long-quiet watch was previously vulnerable to a silently-wedged gRPC stream. Etcd's periodic empty-progress notifications act as a cheap liveness probe; the cost is negligible. Opt out with `WithProgressNotify(false)` if you have a reason.
+
+### Added
+
+- **`Provider.ReadCtx(ctx)` and `Provider.ReadBytesCtx(ctx)`.** Context-aware variants of the koanf.Provider interface methods. `Read()` and `ReadBytes()` retain their signatures (required by koanf.Provider) and now wrap the new methods with `context.Background()`. Use the new methods when you want to bound a slow etcd read with a caller-supplied deadline or cancel.
+
+### Performance
+
+- **Prefix read pagination no longer rebuilds the option slice every page.** Static-per-call options (`WithSerializable`, `WithRev`, `WithLimit`, `WithSort`) are built once outside the loop; `prefixEnd` is computed once. Pure perf win, no semantic change.
+
 ## [0.3.2] - 2026-06-14
 
 ### Fixed

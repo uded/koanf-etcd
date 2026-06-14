@@ -982,6 +982,132 @@ func TestClose_HonorsCloseTimeout(t *testing.T) {
 	}
 }
 
+// TestOnReconnect_FiresAfterSuccessfulRecovery verifies the v0.4 contract
+// change: OnReconnect fires AFTER a session that actually delivers events
+// again (or after a successful resync) following one or more failed
+// sessions — not before each backoff window. attempts >= 1 always; the
+// supplied lastErr is the most-recent failure; revision is the recovered
+// session's revision.
+func TestOnReconnect_FiresAfterSuccessfulRecovery(t *testing.T) {
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 30*time.Second)
+	if _, err := cli.Put(ctx, "/svc/k", "v0"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	type reconnect struct {
+		attempts int
+		err      error
+		rev      int64
+	}
+	reconnects := make(chan reconnect, 4)
+	p, err := ketcd.New(
+		ketcd.WithClient(cli),
+		ketcd.WithPrefix("/svc/"),
+		ketcd.WithReconnectBackoff(50*time.Millisecond, 200*time.Millisecond),
+		ketcd.WithOnReconnect(func(attempt int, lastErr error, rev int64) {
+			select {
+			case reconnects <- reconnect{attempt, lastErr, rev}:
+			default:
+			}
+		}),
+	)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	if _, err := p.Read(); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	// Drive a compaction BEFORE Watch starts so the watch's resume
+	// point (Read's revision + 1) lands inside the compacted range,
+	// guaranteeing ErrCompacted on watch start. The follow-up resync
+	// is the recovery; OnReconnect fires there.
+	var latestRev int64
+	for i := 0; i < 20; i++ {
+		putResp, err := cli.Put(ctx, "/svc/k", fmt.Sprintf("v%d", i+1))
+		if err != nil {
+			t.Fatalf("put: %v", err)
+		}
+		latestRev = putResp.Header.Revision
+	}
+	if _, err := cli.Compact(ctx, latestRev); err != nil {
+		t.Logf("compact: %v (best-effort)", err)
+	}
+
+	if err := p.Watch(func(any, error) {}); err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+
+	select {
+	case r := <-reconnects:
+		if r.attempts < 1 {
+			t.Errorf("expected attempts>=1, got %d", r.attempts)
+		}
+		if r.rev == 0 {
+			t.Errorf("expected non-zero revision, got 0")
+		}
+		// lastErr should be the original failure (typically ErrCompacted)
+		if r.err == nil {
+			t.Errorf("expected non-nil lastErr on first successful recovery")
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("OnReconnect never fired after recovery")
+	}
+}
+
+// TestReadCtx_HonorsCancel verifies the new ReadCtx surface exits
+// promptly when the caller cancels the supplied context.
+func TestReadCtx_HonorsCancel(t *testing.T) {
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 5*time.Second)
+	if _, err := cli.Put(ctx, "/svc/k", "v"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	p, err := ketcd.New(ketcd.WithClient(cli), ketcd.WithKey("/svc/k"))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	cctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled at call time
+	_, err = p.ReadCtx(cctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected wrapped context.Canceled, got %v", err)
+	}
+}
+
+// TestReadBytesCtx_HonorsCancel mirrors TestReadCtx_HonorsCancel but
+// for blob mode.
+func TestReadBytesCtx_HonorsCancel(t *testing.T) {
+	cli := embeddedEtcd(t)
+	ctx := ctxWithTimeout(t, 5*time.Second)
+	if _, err := cli.Put(ctx, "/cfg", "{}"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	p, err := ketcd.New(
+		ketcd.WithClient(cli),
+		ketcd.WithKey("/cfg"),
+		ketcd.WithBlob(),
+		ketcd.WithUnflatten(false),
+	)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	cctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = p.ReadBytesCtx(cctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected wrapped context.Canceled, got %v", err)
+	}
+}
+
 // TestWatchTyped_RejectsAlreadyCancelledCtx guards against a regression
 // where WatchTyped would accept a pre-cancelled ctx, install watch state,
 // launch a goroutine that immediately exited on its first ctx-check, and

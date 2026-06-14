@@ -14,6 +14,10 @@ import (
 // the prefix, with the prefix stripped and "/" replaced by the delimiter
 // (configurable). In blob mode it returns ErrUseParser (use ReadBytes
 // with a parser).
+//
+// Read is equivalent to ReadCtx(context.Background()). Use ReadCtx when
+// you need to bound the underlying etcd RPCs with a caller-supplied
+// deadline or cancel.
 func (p *Provider) Read() (map[string]any, error) {
 	return p.readCtx(context.Background())
 }
@@ -21,8 +25,31 @@ func (p *Provider) Read() (map[string]any, error) {
 // ReadBytes implements koanf.Provider for blob mode. In blob mode it
 // returns the raw value of the configured key. Outside blob mode it
 // returns ErrNotBlob — use Read() instead.
+//
+// ReadBytes is equivalent to ReadBytesCtx(context.Background()). Use
+// ReadBytesCtx when you need to bound the underlying etcd RPC with a
+// caller-supplied deadline or cancel.
 func (p *Provider) ReadBytes() ([]byte, error) {
 	return p.readBytesCtx(context.Background())
+}
+
+// ReadCtx is a context-aware variant of Read. The supplied ctx bounds
+// the underlying etcd RPCs; the per-request timeout from WithReadTimeout
+// still applies independently. Cancelling ctx aborts an in-flight read
+// promptly with a wrapped context.Canceled or context.DeadlineExceeded.
+//
+// Use ReadCtx (rather than Read) when the caller owns a deadline that
+// should govern the whole read — for example a request-scoped timeout
+// in an HTTP handler or a graceful-shutdown ctx that must short-circuit
+// a slow prefix scan.
+func (p *Provider) ReadCtx(ctx context.Context) (map[string]any, error) {
+	return p.readCtx(ctx)
+}
+
+// ReadBytesCtx is a context-aware variant of ReadBytes for blob mode.
+// See ReadCtx for the semantics of the supplied ctx.
+func (p *Provider) ReadBytesCtx(ctx context.Context) ([]byte, error) {
+	return p.readBytesCtx(ctx)
 }
 
 // readCtx is the context-aware backend for Read. The watch loop's resync
@@ -122,9 +149,28 @@ func (p *Provider) readPrefix(parent context.Context) (map[string]any, error) {
 	more := true
 	first := true
 
+	// Hoist the option fragments that don't change per page out of the
+	// loop. A 10k-key prefix paginated at limit=500 would otherwise
+	// rebuild this slice 20× per call for no semantic benefit.
+	staticOpts := []clientv3.OpOption{}
+	if p.settings.serializable {
+		staticOpts = append(staticOpts, clientv3.WithSerializable())
+	}
+	if p.settings.readRevision > 0 {
+		staticOpts = append(staticOpts, clientv3.WithRev(p.settings.readRevision))
+	}
+	if p.settings.limit > 0 {
+		staticOpts = append(staticOpts,
+			clientv3.WithLimit(p.settings.limit),
+			clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend),
+		)
+	}
+	rangeEnd := prefixEnd(p.settings.prefix)
+
 	for more {
 		ctx, cancel := context.WithTimeout(parent, p.settings.readTimeout)
-		var opts []clientv3.OpOption
+		// Copy the static options and append the page-specific bound.
+		opts := append([]clientv3.OpOption(nil), staticOpts...)
 		var key string
 		if first {
 			key = p.settings.prefix
@@ -132,17 +178,7 @@ func (p *Provider) readPrefix(parent context.Context) (map[string]any, error) {
 		} else {
 			// Paginate from lastKey+\x00 through the end of the prefix range.
 			key = lastKey + "\x00"
-			opts = append(opts, clientv3.WithRange(prefixEnd(p.settings.prefix)))
-		}
-		if p.settings.serializable {
-			opts = append(opts, clientv3.WithSerializable())
-		}
-		if p.settings.readRevision > 0 {
-			opts = append(opts, clientv3.WithRev(p.settings.readRevision))
-		}
-		if p.settings.limit > 0 {
-			opts = append(opts, clientv3.WithLimit(p.settings.limit))
-			opts = append(opts, clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend))
+			opts = append(opts, clientv3.WithRange(rangeEnd))
 		}
 
 		resp, err := p.client.Get(ctx, key, opts...)
