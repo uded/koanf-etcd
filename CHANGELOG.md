@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The watch loop no longer fires a doomed `Watch` RPC after a compaction recovery whose `resync()` itself failed. Previously each wakeup re-opened a watch from the still-compacted revision, immediately re-receiving `ErrCompacted`. The loop now tracks a `pendingResync` state and retries the full re-read directly until etcd is reachable again.
+- `WatchTyped(ctx, cb)` now returns a wrapped `context.Canceled` immediately when the supplied `ctx` is already cancelled at call time, instead of starting a goroutine that exits silently and leaves the caller waiting forever for a callback that never fires.
+
 ## [0.3.1] - 2026-06-05
 
 ### Added

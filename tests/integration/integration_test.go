@@ -981,3 +981,42 @@ func TestClose_HonorsCloseTimeout(t *testing.T) {
 		t.Errorf("Close took %v; want roughly the 300ms timeout, not 0 and not unbounded", d)
 	}
 }
+
+// TestWatchTyped_RejectsAlreadyCancelledCtx guards against a regression
+// where WatchTyped would accept a pre-cancelled ctx, install watch state,
+// launch a goroutine that immediately exited on its first ctx-check, and
+// leave the caller waiting forever for a callback that would never fire.
+// A subsequent Watch() call must also still succeed — the rejection must
+// not have polluted watchCancel/watchDone state.
+func TestWatchTyped_RejectsAlreadyCancelledCtx(t *testing.T) {
+	cli := embeddedEtcd(t)
+	if _, err := cli.Put(context.Background(), "/svc/k", "v"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	p, err := ketcd.New(ketcd.WithClient(cli), ketcd.WithPrefix("/svc/"))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	if _, err := p.Read(); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel
+
+	err = p.WatchTyped(ctx, func([]ketcd.Event, error) {})
+	if err == nil {
+		t.Fatal("expected error for already-cancelled ctx; got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected wrapped context.Canceled, got %v", err)
+	}
+
+	// And a fresh Watch should still succeed afterwards — the rejection
+	// must not have polluted watch state.
+	if err := p.Watch(func(any, error) {}); err != nil {
+		t.Fatalf("subsequent Watch failed (state leaked from rejected WatchTyped): %v", err)
+	}
+}
